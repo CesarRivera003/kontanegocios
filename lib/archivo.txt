@@ -1,0 +1,124 @@
+Listado de rutas de carpetas
+El número de serie del volumen es 2C25-821F
+C:.
+¦   archivo.txt
+¦   firebase_options.dart
+¦   main.dart
+¦   
++---core
+¦   +---router
+¦   ¦       app_router.dart
+¦   ¦       
+¦   +---theme
+¦   ¦       app_theme.dart
+¦   ¦       
+¦   +---utils
+¦           currency_formatter.dart
+¦           currency_input_formatter.dart
+¦           
++---features
+¦   +---auth
+¦   ¦   +---data
+¦   ¦   ¦       auth_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   +---presentation
+¦   ¦       ¦   auth_providers.dart
+¦   ¦       ¦   login_screen.dart
+¦   ¦       ¦   
+¦   ¦       +---legal
+¦   ¦               privacy_screen.dart
+¦   ¦               terms_screen.dart
+¦   ¦               
+¦   +---clients
+¦   ¦   +---data
+¦   ¦   ¦       client_repository.dart
+¦   ¦   ¦       provider_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   ¦       client_model.dart
+¦   ¦   ¦       provider_model.dart
+¦   ¦   ¦       
+¦   ¦   +---presentation
+¦   ¦           clients_screen.dart
+¦   ¦           client_providers.dart
+¦   ¦           save_client_screen.dart
+¦   ¦           save_provider_screen.dart
+¦   ¦           
+¦   +---expenses
+¦   ¦   +---data
+¦   ¦   ¦       expense_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   ¦       expense_model.dart
+¦   ¦   ¦       
+¦   ¦   +---presentation
+¦   ¦           accounts_payable_screen.dart
+¦   ¦           expenses_screen.dart
+¦   ¦           expense_providers.dart
+¦   ¦           save_expense_screen.dart
+¦   ¦           
+¦   +---home
+¦   ¦   +---presentation
+¦   ¦           dashboard_provider.dart
+¦   ¦           dashboard_shell.dart
+¦   ¦           home_screen.dart
+¦   ¦           
+¦   +---inventory
+¦   ¦   +---data
+¦   ¦   ¦       inventory_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   ¦       product_model.dart
+¦   ¦   ¦       
+¦   ¦   +---presentation
+¦   ¦           inventory_providers.dart
+¦   ¦           inventory_screen.dart
+¦   ¦           save_product_screen.dart
+¦   ¦           
+¦   +---reports
+¦   ¦   +---data
+¦   ¦   ¦       reports_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   ¦       report_stats.dart
+¦   ¦   ¦       
+¦   ¦   +---presentation
+¦   ¦           reports_screen.dart
+¦   ¦           report_pdf_generator.dart
+¦   ¦           
+¦   +---sales
+¦   ¦   +---data
+¦   ¦   ¦       sales_repository.dart
+¦   ¦   ¦       
+¦   ¦   +---domain
+¦   ¦   ¦       cart_item_model.dart
+¦   ¦   ¦       sale_model.dart
+¦   ¦   ¦       
+¦   ¦   +---presentation
+¦   ¦           accounts_receivable_screen.dart
+¦   ¦           cart_provider.dart
+¦   ¦           checkout_modal.dart
+¦   ¦           pdf_generator.dart
+¦   ¦           pos_screen.dart
+¦   ¦           sales_history_screen.dart
+¦   ¦           sales_screen.dart
+¦   ¦           
+¦   +---settings
+¦       +---data
+¦       ¦       settings_repository.dart
+¦       ¦       
+¦       +---domain
+¦       ¦       company_model.dart
+¦       ¦       
+¦       +---presentation
+¦               company_profile_screen.dart
+¦               security_screen.dart
+¦               settings_screen.dart
+¦               user_management_screen.dart
+¦               
++---shared
+    +---widgets
+            barcode_scanner_screen.dart
+            custom_text_field.dart
+            

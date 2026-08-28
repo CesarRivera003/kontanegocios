@@ -1,0 +1,98 @@
+name: konta_gestor
+description: "Software de punto de venta, contabilidad y facturación electrónica para empresas en Colombia."
+publish_to: 'none' # Evita que el código se suba accidentalmente a repositorios públicos
+
+# Versión oficial de la aplicación (Visible para el usuario + Número interno de compilación)
+version: 3.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+
+  # --- UI, Iconos y Gráficos ---
+  cupertino_icons: ^1.0.8
+  google_fonts: ^8.2.1
+  fl_chart: ^1.1.1
+  material_symbols_icons: ^4.2906.0
+  
+  # --- Arquitectura, Estado y Rutas ---
+  flutter_riverpod: ^3.1.0
+  go_router: ^17.0.1
+  
+  # --- Firebase y Backend ---
+  firebase_core: ^4.3.0
+  firebase_auth: ^6.1.3
+  cloud_firestore: ^6.1.1
+  cloud_functions: ^6.0.5
+  firebase_storage: ^13.0.6
+  http: ^1.6.0
+  
+  # --- Utilidades Core ---
+  intl: ^0.20.2
+  collection: ^1.19.1
+  url_launcher: ^6.3.2
+  path: ^1.9.0
+  
+  # --- Hardware y Archivos ---
+  image_picker: ^1.2.1
+  flutter_image_compress: ^2.4.0
+  mobile_scanner: ^7.1.4
+  file_picker: ^8.0.0
+  share_plus: ^12.0.1
+  excel: ^4.0.0
+  
+  # --- PDF e Impresión Térmica ---
+  pdf: ^3.11.3
+  printing: ^5.14.2
+
+  # --- Pasarelas de Pago / Suscripciones ---
+  purchases_flutter: ^9.15.1
+
+  # --- IMPRESIÓN TÉRMICA ESC/POS ---
+  esc_pos_utils_plus: ^2.0.3     # El traductor que convierte tu texto a bytes de código de máquina
+  print_bluetooth_thermal: ^1.0.8 # El mensajero que envía los bytes por Bluetooth (Android/iOS)
+  permission_handler: ^11.3.0     # Para pedirle permiso al usuario de encender el Bluetooth
+  uuid: ^4.6.0
+  sentry_flutter: ^9.26.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1 # Generador automático de iconos
+
+flutter:
+  uses-material-design: true
+
+  # Registro de imágenes y logos de la aplicación
+  assets:
+    - assets/
+    - assets/images/logo.png
+    - assets/images/Logo_horizontal_oscuro_small.png
+    - assets/images/logo_sin_titulo_small.png
+    - assets/textures/
+
+# ==========================================
+# CONFIGURACIÓN DE ICONOS DE LA APLICACIÓN
+# ==========================================
+flutter_launcher_icons:
+  android: "launcher_icon"
+  min_sdk_android: 21
+  ios: true
+  image_path: "assets/icon.png"
+  web:
+    generate: true
+    image_path: "assets/icon.png"
+    background_color: "#ffffff" 
+    theme_color: "#1D4ED8" # Azul corporativo Konta      
+  windows:
+    generate: true
+    icon_size: 48
+  macos:
+    generate: true
+    image_path: "assets/icon.png"
