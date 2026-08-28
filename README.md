@@ -1,16 +1,29 @@
-# konta_gestor
+# Konta Negocios 🚀
 
-A new Flutter project.
+**Konta Negocios** es un sistema multiplataforma (Android, Windows, Web) de gestión comercial y punto de venta (POS), diseñado para ayudar a pequeñas y medianas empresas a administrar sus ventas, inventario y facturación de forma eficiente.
 
-## Getting Started
+---
 
-This project is a starting point for a Flutter application.
+## 🛠️ Tecnologías Utilizadas
 
-A few resources to get you started if this is your first Flutter project:
+* **Framework:** [Flutter](https://flutter.dev/) (Dart)
+* **Backend & BD:** Firebase (Firestore, Authentication)
+* **Pasarela de Pagos:** Wompi
+* **Plataformas Soportadas:** Android, Windows, Web
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+---
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## 📂 Estructura del Proyecto
+
+* `lib/`: Código fuente de la aplicación (UI, lógica de negocio, modelos y servicios).
+* `assets/`: Imágenes, íconos y recursos estáticos.
+* `android/`, `windows/`, `web/`: Archivos de configuración específicos de cada plataforma.
+
+---
+
+## ⚙️ Requisitos Previos y Configuración
+
+1. **Flutter SDK:** Asegúrate de tener instalado Flutter en su versión estable.
+2. **Dependencias:** Ejecuta el comando para descargar los paquetes:
+   ```bash
+   flutter pub get
