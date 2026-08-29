@@ -71,7 +71,7 @@ class _ElectronicInvoiceConfigScreenState extends ConsumerState<ElectronicInvoic
           .set({
         'prefix': _prefixCtrl.text.trim().toUpperCase(),
         'resolutionNumber': _resolutionCtrl.text.trim(),
-        'isTestEnvironment': false, // 🟢 <-- Cambiado a false fijo para el cliente final
+        'isTestEnvironment': true, // 🟢 <-- Cambiado a false fijo para el cliente final
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
