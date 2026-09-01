@@ -91,14 +91,14 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
               showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
               try {
                 final callable = FirebaseFunctions.instance.httpsCallable('emitirNotaCreditoPlemsi');
-                await callable.call({
-                  'companyId': companyId,
-                  'originalPrefix': sale.dianPrefix,
-                  'originalNumber': sale.dianNumber,
-                  'originalCufe': sale.cufe,
-                  'reason': 'Devolución de mercancía / Anulación de servicio',
-                  'clientName': sale.clientName, // El backend deberá buscar los datos completos con este nombre
-                });
+                  await callable.call({
+                    'companyId': companyId,
+                    'saleId': sale.id, // <-- Solo añadimos esta línea
+                    'originalPrefix': sale.dianPrefix,
+                    'originalNumber': sale.dianNumber,
+                    'originalCufe': sale.cufe,
+                    'reason': 'Devolución de mercancía / Anulación de servicio',
+                  });
                 if (mounted) Navigator.pop(context);
                 if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Nota Crédito Emitida'), backgroundColor: Colors.green));
               } catch (e) {

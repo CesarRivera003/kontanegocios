@@ -143,6 +143,7 @@ class SalesRepository {
           items: Sale.cartItemsToMap(cartItems),
           initialPayments: paymentMethods,
           clientName: clientName,
+          clientIdNumber: (client != null && client.idNumber.isNotEmpty) ? client.idNumber : null,
           sellerName: sellerName ?? 'Admin',
           additionalCosts: additionalCosts ?? [],
           isElectronicInvoice: isElectronicInvoice,

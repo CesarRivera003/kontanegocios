@@ -427,36 +427,163 @@ exports.reenviarCorreoPlemsi = onCall(async (request) => {
 exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Debes iniciar sesión.');
 
-    const { companyId, originalPrefix, originalNumber, originalCufe, reason } = request.data;
+    const { companyId, saleId, originalPrefix, originalNumber, originalCufe, reason } = request.data;
 
     try {
         const db = admin.firestore();
         const configSnap = await db.collection('companies').doc(companyId).collection('config').doc('fe_config').get();
         const feConfig = configSnap.data();
 
+        // 1. OBTENER LA VENTA ORIGINAL
+        const saleSnap = await db.collection('companies').doc(companyId).collection('sales').doc(saleId).get();
+        if (!saleSnap.exists) throw new HttpsError('not-found', "La venta original no existe.");
+        const saleData = saleSnap.data();
+
+        // 2. OBTENER DATOS DEL CLIENTE (Búsqueda robusta)
+        let clientQuery;
+        
+        if (saleData.clientIdNumber) {
+            // A) Ventas nuevas: Búsqueda exacta por número de documento (NIT/CC)
+            clientQuery = await db.collection('companies').doc(companyId).collection('clients')
+                .where('idNumber', '==', saleData.clientIdNumber).limit(1).get();
+        } else {
+            // B) Ventas antiguas: Fallback por nombre (Salvavidas)
+            clientQuery = await db.collection('companies').doc(companyId).collection('clients')
+                .where('name', '==', saleData.clientName).limit(1).get();
+        }
+
+        if (clientQuery.empty) throw new HttpsError('not-found', "No se encontraron los datos del cliente para la anulación.");
+        const client = clientQuery.docs[0].data();
+
+        // 3. FUNCIONES DE MAPEO (Copiadas de emitirFacturaPlemsi)
+        const mapDocType = (type) => {
+            const t = (type || '').toUpperCase();
+            if (t === 'CC') return 3; if (t === 'NIT') return 6; if (t === 'TI') return 2;
+            if (t === 'CE') return 4; if (t === 'PAS') return 5; return 3;
+        };
+        const calculateDV = (docNum) => {
+            if (!docNum) return "0";
+            const clean = docNum.replace(/[^0-9]/g, '');
+            if (!clean) return "0";
+            const mults = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
+            let sum = 0;
+            for (let i = 0; i < clean.length; i++) {
+                sum += parseInt(clean[clean.length - 1 - i]) * mults[i];
+            }
+            const mod = sum % 11;
+            return mod > 1 ? (11 - mod).toString() : mod.toString();
+        };
+
+        // 4. RECONSTRUIR ITEMS Y MATEMÁTICAS TRIBUTARIAS
+        let itemsList = [];
+        let taxesMap = {};
+        let sumTaxExclusiveTotal = 0.0;
+        let sumTotalTaxes = 0.0;
+        let sumTaxInclusiveTotal = 0.0;
+
+        (saleData.items || []).forEach(item => {
+            const quantity = item.quantity || 1;
+            let lineGrossTotalWithTax = (item.price || 0) * quantity;
+            let lineDiscountWithTax = 0.0;
+
+            (saleData.additionalCosts || []).forEach(cost => {
+                if (cost.amount < 0 && (cost.reason || '').includes(`(${item.name})`)) {
+                    lineDiscountWithTax += Math.abs(cost.amount);
+                }
+            });
+
+            let taxDivisor = item.taxRate > 0 ? (1 + (item.taxRate / 100)) : 1.0;
+            let originalBase = lineGrossTotalWithTax / taxDivisor;
+            let discountBase = lineDiscountWithTax / taxDivisor;
+            let adjustedBase = originalBase - discountBase;
+
+            let currentTaxRate = (item.taxType === 'EXCLUIDO' || item.taxType === 'EXENTO') ? 0.0 : (item.taxRate || 0);
+            let taxId = item.taxType === 'INC' ? 4 : 1;
+            let itemTaxAmount = parseFloat((adjustedBase * (currentTaxRate / 100)).toFixed(2));
+
+            let itemTaxTotals = [{
+                tax_id: taxId, percent: currentTaxRate, tax_amount: itemTaxAmount, taxable_amount: parseFloat(adjustedBase.toFixed(2))
+            }];
+
+            let taxKey = `${taxId}_${currentTaxRate}`;
+            if (!taxesMap[taxKey]) taxesMap[taxKey] = { tax_id: taxId, percent: currentTaxRate, tax_amount: 0.0, taxable_amount: 0.0 };
+            
+            taxesMap[taxKey].tax_amount += itemTaxAmount;
+            taxesMap[taxKey].taxable_amount += adjustedBase;
+
+            let roundedAdjustedBase = parseFloat(adjustedBase.toFixed(2));
+            sumTaxExclusiveTotal += roundedAdjustedBase;
+            sumTotalTaxes += itemTaxAmount;
+
+            let lineAllowances = [];
+            if (discountBase > 0) {
+                lineAllowances.push({
+                    discount_id: 1, charge_indicator: false, allowance_charge_reason: "Descuento Promocional",
+                    base_amount: parseFloat(originalBase.toFixed(2)), amount: parseFloat(discountBase.toFixed(2)),
+                    multiplier_factor_numeric: parseFloat(((discountBase / originalBase) * 100).toFixed(2))
+                });
+            }
+
+            itemsList.push({
+                unit_measure_id: 70, line_extension_amount: roundedAdjustedBase, free_of_charge_indicator: false,
+                allowance_charges: lineAllowances, tax_totals: itemTaxTotals, description: item.name || 'Producto', notes: "",
+                code: (!item.productId || item.productId === '') ? 'PROD' : item.productId.substring(0,6).toUpperCase(),
+                type_item_identification_id: 1, price_amount: parseFloat((originalBase / quantity).toFixed(2)),
+                base_quantity: quantity, invoiced_quantity: quantity
+            });
+        });
+
+        // 5. RECONSTRUIR CARGOS EXTRAS POSITIVOS
+        (saleData.additionalCosts || []).forEach(cost => {
+            if (cost.amount > 0) {
+                let roundedAmount = parseFloat(cost.amount.toFixed(2));
+                sumTaxExclusiveTotal += roundedAmount;
+
+                let taxKeyExtra = '1_0';
+                if (!taxesMap[taxKeyExtra]) taxesMap[taxKeyExtra] = { tax_id: 1, percent: 0, tax_amount: 0, taxable_amount: 0 };
+                taxesMap[taxKeyExtra].taxable_amount += roundedAmount;
+
+                itemsList.push({
+                    unit_measure_id: 70, line_extension_amount: roundedAmount, free_of_charge_indicator: false, allowance_charges: [],
+                    tax_totals: [{ tax_id: 1, percent: 0, tax_amount: 0, taxable_amount: roundedAmount }],
+                    description: cost.reason || 'Cargo Extra', notes: "", code: "CARGO_EXTRA",
+                    type_item_identification_id: 1, price_amount: roundedAmount, base_quantity: 1, invoiced_quantity: 1
+                });
+            }
+        });
+
         const ncSnap = await db.collection('companies').doc(companyId).collection('credit_notes').count().get();
         const currentNcNumber = ncSnap.data().count + 1;
 
         const now = new Date();
         const colTime = new Date(now.getTime() - (5 * 60 * 60 * 1000));
+        const dateStr = colTime.toISOString().split('T')[0];
+        const timeStr = colTime.toISOString().split('T')[1].split('.')[0];
 
+        // 6. CONSTRUIR PAYLOAD FINAL
         const payload = {
-            date: colTime.toISOString().split('T')[0],
-            time: colTime.toISOString().split('T')[1].split('.')[0],
+            date: dateStr,
+            time: timeStr,
             prefix: "NC", 
             number: currentNcNumber,
             billing_reference: {
                 number: originalPrefix + originalNumber,
                 uuid: originalCufe,
-                issue_date: colTime.toISOString().split('T')[0] 
+                issue_date: dateStr 
             },
             discrepancy_response: {
                 reference: originalPrefix + originalNumber,
                 correction_concept_id: 2, 
                 description: reason || "Anulación por devolución del cliente"
             },
-            customer: request.data.customer, 
-            items: request.data.items,
+            customer: {
+                identification_number: (client.idNumber || '').replace(/[^0-9]/g, ''), dv: calculateDV(client.idNumber),
+                name: client.name || 'Cliente', phone: (client.phone || '').replace(/[^0-9]/g, ''), address: client.address || "No registra",
+                email: client.email || '', merchant_registration: "00000000", type_document_identification_id: mapDocType(client.idType),
+                type_organization_id: client.personType === '1' ? 1 : 2, type_liability_id: 117,
+                municipality_code: client.daneCode || "11001", type_regime_id: client.taxRegime === '48' ? 0 : 1
+            },
+            items: itemsList,
             resolution: feConfig.resolutionNumber 
         };
 
