@@ -439,15 +439,17 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
         if (!saleSnap.exists) throw new HttpsError('not-found', "La venta original no existe.");
         const saleData = saleSnap.data();
 
-        // 2. OBTENER DATOS DEL CLIENTE (Búsqueda robusta)
+        // Extraer la fecha EXACTA de la factura original
+        const originalDateObj = saleData.date.toDate();
+        const originalDateCol = new Date(originalDateObj.getTime() - (5 * 60 * 60 * 1000));
+        const originalDateStr = originalDateCol.toISOString().split('T')[0];
+
+        // 2. OBTENER DATOS DEL CLIENTE
         let clientQuery;
-        
         if (saleData.clientIdNumber) {
-            // A) Ventas nuevas: Búsqueda exacta por número de documento (NIT/CC)
             clientQuery = await db.collection('companies').doc(companyId).collection('clients')
                 .where('idNumber', '==', saleData.clientIdNumber).limit(1).get();
         } else {
-            // B) Ventas antiguas: Fallback por nombre (Salvavidas)
             clientQuery = await db.collection('companies').doc(companyId).collection('clients')
                 .where('name', '==', saleData.clientName).limit(1).get();
         }
@@ -455,7 +457,6 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
         if (clientQuery.empty) throw new HttpsError('not-found', "No se encontraron los datos del cliente para la anulación.");
         const client = clientQuery.docs[0].data();
 
-        // 3. FUNCIONES DE MAPEO (Copiadas de emitirFacturaPlemsi)
         const mapDocType = (type) => {
             const t = (type || '').toUpperCase();
             if (t === 'CC') return 3; if (t === 'NIT') return 6; if (t === 'TI') return 2;
@@ -474,7 +475,7 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
             return mod > 1 ? (11 - mod).toString() : mod.toString();
         };
 
-        // 4. RECONSTRUIR ITEMS Y MATEMÁTICAS TRIBUTARIAS
+        // 3. RECONSTRUIR ITEMS Y MATEMÁTICAS TRIBUTARIAS
         let itemsList = [];
         let taxesMap = {};
         let sumTaxExclusiveTotal = 0.0;
@@ -533,7 +534,6 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
             });
         });
 
-        // 5. RECONSTRUIR CARGOS EXTRAS POSITIVOS
         (saleData.additionalCosts || []).forEach(cost => {
             if (cost.amount > 0) {
                 let roundedAmount = parseFloat(cost.amount.toFixed(2));
@@ -552,6 +552,12 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
             }
         });
 
+        // 4. CALCULAR TOTALES GLOBALES
+        sumTaxInclusiveTotal = sumTaxExclusiveTotal + sumTotalTaxes;
+        let allTaxTotals = Object.values(taxesMap).map(t => ({
+            tax_id: t.tax_id, percent: t.percent, tax_amount: parseFloat(t.tax_amount.toFixed(2)), taxable_amount: parseFloat(t.taxable_amount.toFixed(2))
+        }));
+
         const ncSnap = await db.collection('companies').doc(companyId).collection('credit_notes').count().get();
         const currentNcNumber = ncSnap.data().count + 1;
 
@@ -560,21 +566,24 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
         const dateStr = colTime.toISOString().split('T')[0];
         const timeStr = colTime.toISOString().split('T')[1].split('.')[0];
 
-        // 6. CONSTRUIR PAYLOAD FINAL
+        // Mantenemos NCTT para pruebas o NC para producción
+        const ncPrefix = feConfig.isTestEnvironment ? "NCTT" : "NC";
+
+        // 5. CONSTRUIR PAYLOAD FINAL (IDÉNTICO A LA DOC DE PLEMSI)
         const payload = {
             date: dateStr,
             time: timeStr,
-            prefix: "NC", 
+            prefix: ncPrefix, 
             number: currentNcNumber,
-            billing_reference: {
+            send_email: true,
+            invoiceReference: { // <-- Corregido según documentación
                 number: originalPrefix + originalNumber,
                 uuid: originalCufe,
-                issue_date: dateStr 
+                issue_date: originalDateStr 
             },
-            discrepancy_response: {
-                reference: originalPrefix + originalNumber,
-                correction_concept_id: 2, 
-                description: reason || "Anulación por devolución del cliente"
+            discrepancy: { // <-- Corregido según documentación
+                code: 2, 
+                description: reason || "Anulación solicitada por el emisor"
             },
             customer: {
                 identification_number: (client.idNumber || '').replace(/[^0-9]/g, ''), dv: calculateDV(client.idNumber),
@@ -583,13 +592,25 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
                 type_organization_id: client.personType === '1' ? 1 : 2, type_liability_id: 117,
                 municipality_code: client.daneCode || "11001", type_regime_id: client.taxRegime === '48' ? 0 : 1
             },
+            payment: { // <-- Agregado según la documentación
+                payment_form_id: 1,
+                payment_method_id: 10,
+                payment_due_date: dateStr,
+                duration_measure: "0"
+            },
             items: itemsList,
-            resolution: feConfig.resolutionNumber 
+            resolution: feConfig.resolutionNumber, // <-- Devuelto al código
+            invoiceBaseTotal: parseFloat(sumTaxExclusiveTotal.toFixed(2)), 
+            invoiceTaxExclusiveTotal: parseFloat(sumTaxExclusiveTotal.toFixed(2)),
+            invoiceTaxInclusiveTotal: parseFloat(sumTaxInclusiveTotal.toFixed(2)), 
+            totalToPay: parseFloat(sumTaxInclusiveTotal.toFixed(2)),
+            allTaxTotals: allTaxTotals
         };
 
+        // <-- URL CORREGIDA: termina en /credit, NO en /credit-note
         const plemsiUrl = feConfig.isTestEnvironment 
-            ? "https://pruebas.plemsi.com/api/billing/credit-note" 
-            : "https://api.plemsi.com/api/billing/credit-note";
+            ? "https://pruebas.plemsi.com/api/billing/credit" 
+            : "https://api.plemsi.com/api/billing/credit";
 
         const response = await axios.post(plemsiUrl, payload, {
             headers: { "Authorization": `Bearer ${PLEMSI_MASTER_API_KEY}`, "Content-Type": "application/json" },
@@ -598,7 +619,7 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
 
         if (response.data.success) {
             await db.collection('companies').doc(companyId).collection('credit_notes').add({
-                ncPrefix: "NC",
+                ncPrefix: ncPrefix,
                 ncNumber: currentNcNumber,
                 originalFactura: originalPrefix + originalNumber,
                 cude: response.data.data.cude,
@@ -606,8 +627,8 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
             });
             return { status: 'Aceptada', cude: response.data.data.cude };
         } else {
-            console.error("Rechazo DIAN (Nota Crédito):", JSON.stringify(response.data.data));
-            return { status: 'Rechazada', error: 'Rechazado por la DIAN' };
+            console.error("Rechazo DIAN (Nota Crédito):", JSON.stringify(response.data));
+            return { status: 'Rechazada', error: response.data.message || response.data.info || 'Rechazado por la DIAN' };
         }
     } catch (error) {
         console.error("Error crítico emitiendo Nota Crédito:", error);

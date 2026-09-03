@@ -86,31 +86,50 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Cancelar")),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-            onPressed: () async {
-              Navigator.pop(ctx);
-              showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
-              try {
-                final callable = FirebaseFunctions.instance.httpsCallable('emitirNotaCreditoPlemsi');
-                  await callable.call({
-                    'companyId': companyId,
-                    'saleId': sale.id, // <-- Solo añadimos esta línea
-                    'originalPrefix': sale.dianPrefix,
-                    'originalNumber': sale.dianNumber,
-                    'originalCufe': sale.cufe,
-                    'reason': 'Devolución de mercancía / Anulación de servicio',
-                  });
-                if (mounted) Navigator.pop(context);
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Nota Crédito Emitida'), backgroundColor: Colors.green));
-              } catch (e) {
-                if (mounted) Navigator.pop(context);
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error anulando: $e')));
-              }
+            onPressed: () {
+              Navigator.pop(ctx); // 1. Cierra el cuadro de diálogo de confirmación
+              
+              // 2. Abre el loader y le pasa su PROPIO contexto a la función que hace el llamado
+              showDialog(
+                context: context, 
+                barrierDismissible: false, 
+                builder: (loaderCtx) {
+                  _procesarAnulacion(loaderCtx, sale, companyId);
+                  return const Center(child: CircularProgressIndicator());
+                }
+              );
             },
             child: const Text("Anular Factura", style: TextStyle(color: Colors.white)),
           )
         ],
       ),
     );
+  }
+
+  // 3. Función aislada que maneja la llamada y usa el loaderCtx para cerrarse a sí misma
+  Future<void> _procesarAnulacion(BuildContext loaderCtx, Sale sale, String companyId) async {
+    try {
+      final callable = FirebaseFunctions.instance.httpsCallable('emitirNotaCreditoPlemsi');
+      final resp = await callable.call({
+        'companyId': companyId,
+        'saleId': sale.id, 
+        'originalPrefix': sale.dianPrefix,
+        'originalNumber': sale.dianNumber,
+        'originalCufe': sale.cufe,
+        'reason': 'Devolución de mercancía / Anulación de servicio',
+      });
+      
+      if (loaderCtx.mounted) Navigator.pop(loaderCtx); // Cierra el loader de forma exacta
+      
+      if (resp.data['status'] == 'Aceptada') {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Nota Crédito Emitida y Aceptada'), backgroundColor: Colors.green));
+      } else {
+        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Rechazo DIAN: ${resp.data['error']}'), backgroundColor: Colors.red));
+      }
+    } catch (e) {
+      if (loaderCtx.mounted) Navigator.pop(loaderCtx); // Cierra el loader si hay fallo crítico
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error crítico anulando: $e'), backgroundColor: Colors.red));
+    }
   }
 
   @override
