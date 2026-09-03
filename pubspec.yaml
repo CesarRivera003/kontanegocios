@@ -49,6 +49,7 @@ dependencies:
   # --- PDF e Impresión Térmica ---
   pdf: ^3.11.3
   printing: ^5.14.2
+  universal_html: ^2.3.0
 
   # --- Pasarelas de Pago / Suscripciones ---
   purchases_flutter: ^9.15.1
@@ -59,6 +60,7 @@ dependencies:
   permission_handler: ^11.3.0     # Para pedirle permiso al usuario de encender el Bluetooth
   uuid: ^4.6.0
   sentry_flutter: ^9.26.0
+  path_provider: ^2.1.6
 
 dev_dependencies:
   flutter_test:

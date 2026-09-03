@@ -7,6 +7,11 @@ import '../../../core/utils/currency_formatter.dart';
 import '../../sales/data/sales_repository.dart';
 import '../../sales/domain/sale_model.dart';
 import '../../auth/presentation/auth_providers.dart';
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:universal_html/html.dart' as html;
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 
 class ElectronicInvoicesScreen extends ConsumerStatefulWidget {
   const ElectronicInvoicesScreen({super.key});
@@ -27,21 +32,79 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
     }
   }
 
-  Future<void> _downloadPlemsiPdf(String companyId, String prefix, int number) async {
+  // Función para procesar y descargar archivos en Web, Android y Windows
+  Future<void> _downloadWebFile(String base64String, String fileName, String mimeType) async {
+    final bytes = base64Decode(base64String);
+
+    if (kIsWeb) {
+      // 1. Lógica nativa para navegadores WEB
+      final blob = html.Blob([bytes], mimeType);
+      final url = html.Url.createObjectUrlFromBlob(blob);
+      final anchor = html.AnchorElement(href: url)
+        ..setAttribute("download", fileName)
+        ..style.display = 'none';
+      
+      html.document.body?.children.add(anchor);
+      anchor.click();
+      anchor.remove();
+      html.Url.revokeObjectUrl(url);
+    } else {
+      // 2. Lógica nativa para ANDROID y WINDOWS
+      try {
+        Directory? directory;
+        if (Platform.isAndroid) {
+          // Usa descargas o almacenamiento externo en Android
+          directory = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+        } else if (Platform.isWindows) {
+          // Usa la carpeta de descargas en Windows
+          directory = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+        } else {
+          directory = await getApplicationDocumentsDirectory();
+        }
+
+        final String filePath = '${directory!.path}/$fileName';
+        final file = File(filePath);
+        await file.writeAsBytes(bytes);
+
+        // Muestra una notificación con la ruta donde se guardó
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ Archivo guardado en: $filePath'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('⚠️ Error al guardar: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _downloadPlemsiPdf(String companyId, String cufe) async {
     showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
     try {
       final callable = FirebaseFunctions.instance.httpsCallable('obtenerPdfPlemsi');
-      final resp = await callable.call({'companyId': companyId, 'prefix': prefix, 'number': number});
-      if (mounted) Navigator.pop(context);
+      final resp = await callable.call({'companyId': companyId, 'cufe': cufe});
       
-      if (resp.data['success'] == true) _launchPdf(resp.data['pdfUrl']);
+      if (mounted) Navigator.of(context, rootNavigator: true).pop(); // Cierre forzado del dialog
+      
+      if (resp.data['success'] == true) {
+        final String base64String = resp.data['base64'];
+        await _downloadWebFile(base64String, "Factura_$cufe.pdf", "application/pdf");
+      }
     } catch (e) {
-      if (mounted) Navigator.pop(context);
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error obteniendo PDF: $e')));
     }
   }
 
-  void _showEmailDialog(String companyId, String prefix, int number) {
+
+  void _showEmailDialog(String companyId, Sale sale) {
     final ctrl = TextEditingController();
     showDialog(
       context: context,
@@ -57,15 +120,17 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
           ElevatedButton(
             onPressed: () async {
               if (ctrl.text.isEmpty || !ctrl.text.contains('@')) return;
-              Navigator.pop(ctx);
+              Navigator.pop(ctx); // Cierra el input de correo
+              
               showDialog(context: context, barrierDismissible: false, builder: (_) => const Center(child: CircularProgressIndicator()));
               try {
                 final callable = FirebaseFunctions.instance.httpsCallable('reenviarCorreoPlemsi');
-                await callable.call({'companyId': companyId, 'prefix': prefix, 'number': number, 'email': ctrl.text.trim()});
-                if (mounted) Navigator.pop(context);
-                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('📧 Correo enviado'), backgroundColor: Colors.green));
+                await callable.call({'companyId': companyId, 'cufe': sale.cufe, 'email': ctrl.text.trim()});
+                
+                if (mounted) Navigator.of(context, rootNavigator: true).pop(); // Cierra el indicador de carga
+                if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('📧 Correo enviado con éxito'), backgroundColor: Colors.green));
               } catch (e) {
-                if (mounted) Navigator.pop(context);
+                if (mounted) Navigator.of(context, rootNavigator: true).pop();
                 if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
               }
             },
@@ -221,18 +286,18 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
                         ),
                         trailing: PopupMenuButton<String>(
                           onSelected: (value) {
-                            if (sale.dianPrefix == null || sale.dianNumber == null) {
-                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ Factura muy antigua, no tiene número DIAN guardado')));
+                            if (sale.cufe == null) {
+                              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ Factura pendiente, no tiene CUFE registrado')));
                               return;
                             }
                             if (value == 'dian' && sale.pdfUrl != null) _launchPdf(sale.pdfUrl!);
-                            if (value == 'plemsi') _downloadPlemsiPdf(companyId, sale.dianPrefix!, sale.dianNumber!);
-                            if (value == 'correo') _showEmailDialog(companyId, sale.dianPrefix!, sale.dianNumber!);
+                            if (value == 'plemsi') _downloadPlemsiPdf(companyId, sale.cufe!);
+                            if (value == 'correo') _showEmailDialog(companyId, sale);
                             if (value == 'anular') _showCreditNoteDialog(context, sale, companyId);
                           },
                           itemBuilder: (context) => [
                             if (sale.pdfUrl != null) const PopupMenuItem(value: 'dian', child: Row(children: [Icon(Icons.verified, color: Colors.blue, size: 20), SizedBox(width: 10), Text("Ver Validación DIAN")])),
-                            const PopupMenuItem(value: 'plemsi', child: Row(children: [Icon(Icons.picture_as_pdf, color: Colors.red, size: 20), SizedBox(width: 10), Text("Descargar PDF (Con Logo)")])),
+                            const PopupMenuItem(value: 'plemsi', child: Row(children: [Icon(Icons.picture_as_pdf, color: Colors.red, size: 20), SizedBox(width: 10), Text("Descargar PDF Oficial")])),
                             const PopupMenuItem(value: 'correo', child: Row(children: [Icon(Icons.email, color: Colors.orange, size: 20), SizedBox(width: 10), Text("Reenviar por Correo")])),
                             const PopupMenuItem(value: 'anular', child: Row(children: [Icon(Icons.cancel_presentation, color: Colors.black54, size: 20), SizedBox(width: 10), Text("Emitir Nota Crédito")])),
                           ],

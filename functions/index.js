@@ -360,8 +360,7 @@ exports.emitirFacturaPlemsi = onCall(async (request) => {
 // ==================================================================
 exports.obtenerPdfPlemsi = onCall(async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Debes iniciar sesión.');
-
-    const { companyId, prefix, number } = request.data;
+    const { companyId, cufe } = request.data;
 
     try {
         const db = admin.firestore();
@@ -369,15 +368,15 @@ exports.obtenerPdfPlemsi = onCall(async (request) => {
         const feConfig = configSnap.data();
 
         const plemsiUrl = feConfig.isTestEnvironment 
-            ? `https://pruebas.plemsi.com/api/billing/invoice/${prefix}/${number}` 
-            : `https://api.plemsi.com/api/billing/invoice/${prefix}/${number}`;
+            ? `https://pruebas.plemsi.com/api/billing/invoice/pdf/${cufe}` 
+            : `https://api.plemsi.com/api/billing/invoice/pdf/${cufe}`;
         
         const response = await axios.get(plemsiUrl, {
             headers: { "Authorization": `Bearer ${PLEMSI_MASTER_API_KEY}` }
         });
 
-        if (response.data.success) {
-            return { success: true, pdfUrl: response.data.data.pdf_url || response.data.data.pdfUrl };
+        if (response.data && response.data.data) {
+            return { success: true, base64: response.data.data };
         } else {
             throw new Error("No se pudo obtener el PDF");
         }
@@ -392,8 +391,7 @@ exports.obtenerPdfPlemsi = onCall(async (request) => {
 // ==================================================================
 exports.reenviarCorreoPlemsi = onCall(async (request) => {
     if (!request.auth) throw new HttpsError('unauthenticated', 'Debes iniciar sesión.');
-
-    const { companyId, prefix, number, email } = request.data;
+    const { companyId, cufe, email } = request.data;
 
     try {
         const db = admin.firestore();
@@ -401,13 +399,12 @@ exports.reenviarCorreoPlemsi = onCall(async (request) => {
         const feConfig = configSnap.data();
 
         const plemsiUrl = feConfig.isTestEnvironment 
-            ? "https://pruebas.plemsi.com/api/billing/invoice/send-email" 
-            : "https://api.plemsi.com/api/billing/invoice/send-email";
+            ? "https://pruebas.plemsi.com/api/billing/general/utility/send-email" 
+            : "https://api.plemsi.com/api/billing/general/utility/send-email";
         
         const payload = {
-            prefix: prefix,
-            number: number,
-            email: email
+            cude: cufe, // Aplica el identificador universal de la DIAN
+            targetEmail: email
         };
 
         const response = await axios.post(plemsiUrl, payload, {
