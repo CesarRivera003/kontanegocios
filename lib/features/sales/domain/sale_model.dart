@@ -84,6 +84,7 @@ class Sale {
   final String? ticketNumber; // NUEVO: Ej: POS-00105
   final String? dianPrefix;   // NUEVO: Ej: SETT
   final int? dianNumber;      // NUEVO: Ej: 45
+  final String? clientIdNumber;
 
   Sale({
     required this.id,
@@ -92,6 +93,7 @@ class Sale {
     required this.items,
     required this.initialPayments,
     this.clientName,
+    this.clientIdNumber,
     this.sellerName,
     this.payments = const [], 
     this.additionalCosts = const [],
@@ -126,6 +128,7 @@ class Sale {
       'total': total,
       'items': items,
       'clientName': clientName ?? 'Cliente General',
+      'clientIdNumber': clientIdNumber,
       'sellerName': sellerName ?? 'Admin',
       'initialPayments': initialPayments.map((p) => p.toMap()).toList(),
       'payments': payments.map((p) => p.toMap()).toList(),
@@ -148,6 +151,7 @@ class Sale {
       total: (map['total'] ?? 0).toDouble(),
       items: List<Map<String, dynamic>>.from(map['items'] ?? []),
       clientName: map['clientName'],
+      clientIdNumber: map['clientIdNumber'],
       sellerName: map['sellerName'],
       initialPayments: (map['initialPayments'] as List<dynamic>? ?? [])
           .map((p) => PaymentMethodDetail.fromMap(p as Map<String, dynamic>))
