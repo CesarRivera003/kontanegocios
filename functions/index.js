@@ -622,6 +622,12 @@ exports.emitirNotaCreditoPlemsi = onCall(async (request) => {
                 cude: response.data.data.cude,
                 date: admin.firestore.FieldValue.serverTimestamp()
             });
+
+            // 2. NUEVO: Actualizar la venta original para que la App la marque como anulada
+            await db.collection('companies').doc(companyId).collection('sales').doc(saleId).update({
+                dianStatus: 'Anulada'
+            });
+
             return { status: 'Aceptada', cude: response.data.data.cude };
         } else {
             console.error("Rechazo DIAN (Nota Crédito):", JSON.stringify(response.data));
