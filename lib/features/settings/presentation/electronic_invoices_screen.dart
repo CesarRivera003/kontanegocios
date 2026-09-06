@@ -14,6 +14,7 @@ import 'package:universal_html/html.dart' as html;
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../domain/credit_note_model.dart';
+import '../../finance/presentation/finance_providers.dart';
 
 // ===========================================================================
 // PROVIDER DE RIVERPOD PARA LAS NOTAS CRÉDITO
@@ -191,16 +192,76 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
         'reason': 'Devolución de mercancía / Anulación de servicio',
       });
       
-      if (loaderCtx.mounted) Navigator.pop(loaderCtx); 
+      if (loaderCtx.mounted) Navigator.pop(loaderCtx); // Cierra el loader de forma exacta
       
       if (resp.data['status'] == 'Aceptada') {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Nota Crédito Emitida y Aceptada'), backgroundColor: Colors.green));
+        // ===================================================================
+        // 1. REVERSIÓN FINANCIERA (Efectivo y Bancos - Idéntico a ventas normales)
+        // ===================================================================
+        double cashAmount = 0;
+        Map<String, double> bankReversals = {}; 
+
+        for (var p in sale.initialPayments) {
+          if (p.method == 'Efectivo') {
+            cashAmount += p.amount;
+          } 
+          else if (p.method == 'Transferencia' && p.bankName != null && p.bankName!.isNotEmpty) {
+            final bName = p.bankName!;
+            bankReversals.update(bName, (value) => value + p.amount, ifAbsent: () => p.amount);
+          }
+        }
+
+        final financeRepo = ref.read(financeRepositoryProvider);
+        final desc = 'Anulación FE #${sale.dianPrefix}-${sale.dianNumber}';
+
+        // A. Reversar Efectivo en Caja
+        if (cashAmount > 0) {
+          await financeRepo.registerReversal(
+            amount: -cashAmount, 
+            isCash: true, 
+            description: desc
+          );
+        }
+
+        // B. Reversar Bancos
+        for (var entry in bankReversals.entries) {
+          await financeRepo.registerReversal(
+            amount: -entry.value, 
+            isCash: false,
+            bankName: entry.key, 
+            description: '$desc (${entry.key})'
+          );
+        }
+
+        // ===================================================================
+        // 2. DEVOLVER PRODUCTOS AL INVENTARIO Y MARCAR COMO ANULADA
+        // ===================================================================
+        // Usamos el repositorio de ventas para devolver stock y cambiar el estado sin borrar el documento
+        await ref.read(salesRepositoryProvider).annulElectronicSale(sale.id, sale.items);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('✅ Nota Crédito Aceptada: Inventario devuelto y caja actualizada'), 
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 4),
+            )
+          );
+        }
       } else {
-        if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('❌ Rechazo DIAN: ${resp.data['error']}'), backgroundColor: Colors.red));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('❌ Rechazo DIAN: ${resp.data['error']}'), backgroundColor: Colors.red)
+          );
+        }
       }
     } catch (e) {
       if (loaderCtx.mounted) Navigator.pop(loaderCtx); 
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error crítico anulando: $e'), backgroundColor: Colors.red));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error crítico anulando: $e'), backgroundColor: Colors.red)
+        );
+      }
     }
   }
 

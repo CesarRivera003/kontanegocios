@@ -264,6 +264,64 @@ class SalesRepository {
     final snapshot = await query.get();
     return snapshot.docs.map((doc) => Sale.fromMap(doc.data(), doc.id)).toList();
   }
+
+  // 6. ANULAR FACTURA ELECTRÓNICA (NOTA CRÉDITO)
+  Future<void> annulElectronicSale(String saleId, List<Map<String, dynamic>> items) async {
+    final companyRef = _firestore.collection('companies').doc(userId);
+    final saleRef = companyRef.collection('sales').doc(saleId);
+    final saleSnapshot = await saleRef.get();
+    if (!saleSnapshot.exists) throw Exception("La venta no existe localmente ni en red");
+
+    final data = saleSnapshot.data()!;
+    final double amountToSubtract = (data['total'] as num?)?.toDouble() ?? 0.0;
+    final Timestamp? saleTimestamp = data['date'] as Timestamp?;
+    
+    final batch = _firestore.batch();
+
+    // 1. Marcar la factura electrónica como Anulada (sin borrar el documento)
+    batch.update(saleRef, {'dianStatus': 'Anulada'});
+
+    // 2. Devolver las cantidades al inventario (respetando servicios)
+    for (final item in items) {
+      final productId = item['productId'];
+      final quantityToReturn = (item['quantity'] as num).toDouble();
+      final isService = item['isService'] ?? false;
+      
+      if (productId != null && !isService) {
+        final productRef = companyRef.collection('products').doc(productId);
+        batch.set(productRef, {'stock': FieldValue.increment(quantityToReturn)}, SetOptions(merge: true));
+      }
+    }
+    
+    await batch.commit();
+
+    // 3. Reversar el termómetro de ventas del mes si la venta corresponde al periodo actual
+    if (saleTimestamp != null && amountToSubtract > 0) {
+      try {
+        final profileRef = companyRef.collection('config').doc('profile');
+        final now = DateTime.now();
+        final currentMonthStr = "${now.year}-${now.month.toString().padLeft(2, '0')}";
+        final saleDate = saleTimestamp.toDate();
+        final saleMonthStr = "${saleDate.year}-${saleDate.month.toString().padLeft(2, '0')}";
+
+        await _firestore.runTransaction((transaction) async {
+          final snap = await transaction.get(profileRef);
+          if (!snap.exists) return;
+          
+          final profileData = snap.data() as Map<String, dynamic>;
+          final dbMonth = profileData['currentMonth'] as String?;
+          
+          if (dbMonth == currentMonthStr && saleMonthStr == currentMonthStr) {
+            double currentSales = (profileData['currentMonthSales'] as num?)?.toDouble() ?? 0.0;
+            double newSales = currentSales - amountToSubtract;
+            transaction.set(profileRef, {'currentMonthSales': newSales < 0 ? 0.0 : newSales}, SetOptions(merge: true));
+          }
+        });
+      } catch (e) {
+        debugPrint("Error reversando termómetro de ventas en anulación FE: $e");
+      }
+    }
+  }
 }
 
 final salesRepositoryProvider = Provider<SalesRepository>((ref) {
