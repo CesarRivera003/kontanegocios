@@ -73,6 +73,10 @@ class CashRepository {
 
     for (var doc in salesQuery.docs) {
       final sale = Sale.fromMap(doc.data(), doc.id);
+      
+      // 🔥 NUEVO FILTRO: Ignorar completamente las facturas anuladas (Notas Crédito)
+      if (sale.dianStatus.toUpperCase() == 'ANULADA') continue;
+
       final seller = sale.sellerName ?? ''; 
       if (seller.toLowerCase() != userName.toLowerCase()) continue;
 
