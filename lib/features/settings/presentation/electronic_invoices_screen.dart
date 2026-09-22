@@ -14,6 +14,7 @@ import 'package:universal_html/html.dart' as html;
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import '../domain/credit_note_model.dart';
+import '../domain/debit_note_model.dart';
 import '../../finance/presentation/finance_providers.dart';
 
 // ===========================================================================
@@ -31,6 +32,25 @@ final creditNotesStreamProvider = StreamProvider.autoDispose<List<CreditNote>>((
       .snapshots()
       .map((snapshot) => snapshot.docs
           .map((doc) => CreditNote.fromMap(doc.data(), doc.id))
+          .toList());
+});
+
+
+// ===========================================================================
+// PROVIDER DE RIVERPOD PARA NOTAS DÉBITO
+// ===========================================================================
+final debitNotesStreamProvider = StreamProvider.autoDispose<List<DebitNote>>((ref) {
+  final companyId = ref.watch(companyIdProvider).value;
+  if (companyId == null || companyId.isEmpty) return Stream.value([]);
+
+  return FirebaseFirestore.instance
+      .collection('companies')
+      .doc(companyId)
+      .collection('debit_notes')
+      .orderBy('date', descending: true)
+      .snapshots()
+      .map((snapshot) => snapshot.docs
+          .map((doc) => DebitNote.fromMap(doc.data(), doc.id))
           .toList());
 });
 
@@ -333,7 +353,7 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
                 children: [
                   _buildInvoicesList(salesAsync, companyId), // Tab 1: Facturas
                   _buildCreditNotesList(ref), // Tab 2: Notas Crédito
-                  _buildPlaceholder("Notas Débito Electrónicas\nPróximamente..."),  // Tab 3: Notas Débito
+                  _buildDebitNotesList(),  // Tab 3: Notas Débito
                   _buildPlaceholder("Documentos Soporte\nPróximamente..."),       // Tab 4: Documento Soporte
                 ],
               ),
@@ -531,6 +551,74 @@ class _ElectronicInvoicesScreenState extends ConsumerState<ElectronicInvoicesScr
                 trailing: const Chip(
                   label: Text("DIAN Aceptada", style: TextStyle(color: Color.fromARGB(255, 6, 7, 6), fontSize: 11)),
                   backgroundColor: Color.fromARGB(117, 76, 175, 79),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildDebitNotesList() {
+    final debitNotesAsync = ref.watch(debitNotesStreamProvider);
+
+    return debitNotesAsync.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, s) => Center(child: Text("Error: $e")),
+      data: (allNotes) {
+        final filteredNotes = allNotes.where((nd) {
+          bool matchesDate = nd.date.year == _selectedDate.year && 
+                            nd.date.month == _selectedDate.month && 
+                            nd.date.day == _selectedDate.day;
+          bool matchesSearch = _searchQuery.isEmpty || 
+                              nd.originalFactura.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+                              nd.ndNumber.toString().contains(_searchQuery);
+          return matchesDate && matchesSearch;
+        }).toList();
+
+        if (filteredNotes.isEmpty) {
+          return Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.assignment_late, size: 80, color: Colors.grey[400]),
+                const SizedBox(height: 15),
+                const Text("No hay notas débito para esta fecha.", style: TextStyle(color: Colors.grey)),
+              ],
+            ),
+          );
+        }
+
+        return ListView.builder(
+          padding: const EdgeInsets.all(10),
+          itemCount: filteredNotes.length,
+          itemBuilder: (context, index) {
+            final nd = filteredNotes[index];
+            String formattedDate = DateFormat('dd/MM/yyyy HH:mm').format(nd.date);
+
+            return Card(
+              elevation: 2,
+              margin: const EdgeInsets.only(bottom: 10),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              child: ListTile(
+                leading: const CircleAvatar(
+                  backgroundColor: Colors.blueAccent,
+                  child: Icon(Icons.add_card, color: Colors.white),
+                ),
+                title: Text("${nd.ndPrefix}-${nd.ndNumber}", style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text("Factura Afectada: ${nd.originalFactura}", style: const TextStyle(color: Colors.indigo, fontWeight: FontWeight.bold)),
+                    Text("Valor Adicional: ${CurrencyFormatter.format(nd.totalAdded)}", style: const TextStyle(color: Colors.blue, fontWeight: FontWeight.w600)),
+                    if (nd.reason.isNotEmpty) Text("Motivo: ${nd.reason}", style: TextStyle(color: Colors.grey[700], fontSize: 12)),
+                    Text("Fecha: $formattedDate", style: TextStyle(color: Colors.grey[600], fontSize: 11)),
+                  ],
+                ),
+                trailing: Chip(
+                  label: const Text("DIAN Aceptada", style: TextStyle(color: Colors.green, fontSize: 11)),
+                  backgroundColor: Colors.green[100],
                 ),
               ),
             );

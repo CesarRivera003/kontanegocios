@@ -737,3 +737,182 @@ exports.wompiTransactionWebhook = onRequest(async (req, res) => {
         res.status(500).send("Internal Server Error");
     }
 });
+
+// ==================================================================
+// 9. EMITIR NOTA DÉBITO (INCREMENTAR VALOR / INTERESES)
+// ==================================================================
+exports.emitirNotaDebitoPlemsi = onCall(async (request) => {
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Debes iniciar sesión.');
+
+    const { companyId, saleId, originalPrefix, originalNumber, originalCufe, reasonCode, reasonDescription, additionalItems } = request.data;
+
+    try {
+        const db = admin.firestore();
+        const configSnap = await db.collection('companies').doc(companyId).collection('config').doc('fe_config').get();
+        if (!configSnap.exists) throw new HttpsError('not-found', "Credenciales de Plemsi no configuradas.");
+        const feConfig = configSnap.data();
+
+        // 1. OBTENER VENTA ORIGINAL Y CLIENTE
+        const saleSnap = await db.collection('companies').doc(companyId).collection('sales').doc(saleId).get();
+        if (!saleSnap.exists) throw new HttpsError('not-found', "La venta original no existe.");
+        const saleData = saleSnap.data();
+
+        const originalDateObj = saleData.date.toDate();
+        const originalDateCol = new Date(originalDateObj.getTime() - (5 * 60 * 60 * 1000));
+        const originalDateStr = originalDateCol.toISOString().split('T')[0];
+
+        let clientQuery;
+        if (saleData.clientIdNumber) {
+            clientQuery = await db.collection('companies').doc(companyId).collection('clients')
+                .where('idNumber', '==', saleData.clientIdNumber).limit(1).get();
+        } else {
+            clientQuery = await db.collection('companies').doc(companyId).collection('clients')
+                .where('name', '==', saleData.clientName).limit(1).get();
+        }
+
+        if (clientQuery.empty) throw new HttpsError('not-found', "No se encontraron los datos del cliente.");
+        const client = clientQuery.docs[0].data();
+
+        const mapDocType = (type) => {
+            const t = (type || '').toUpperCase();
+            if (t === 'CC') return 3; if (t === 'NIT') return 6; if (t === 'TI') return 2;
+            if (t === 'CE') return 4; if (t === 'PAS') return 5; return 3;
+        };
+        const calculateDV = (docNum) => {
+            if (!docNum) return "0";
+            const clean = docNum.replace(/[^0-9]/g, '');
+            if (!clean) return "0";
+            const mults = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
+            let sum = 0;
+            for (let i = 0; i < clean.length; i++) {
+                sum += parseInt(clean[clean.length - 1 - i]) * mults[i];
+            }
+            const mod = sum % 11;
+            return mod > 1 ? (11 - mod).toString() : mod.toString();
+        };
+
+        // 2. CONSTRUIR ITEMS Y MATEMÁTICAS TRIBUTARIAS DEL VALOR ADICIONAL
+        let itemsList = [];
+        let taxesMap = {};
+        let sumTaxExclusiveTotal = 0.0;
+        let sumTotalTaxes = 0.0;
+
+        (additionalItems || []).forEach(item => {
+            const quantity = item.quantity || 1;
+            let lineGrossTotalWithTax = (item.price || 0) * quantity;
+            let taxRate = item.taxRate || 0;
+            let taxDivisor = taxRate > 0 ? (1 + (taxRate / 100)) : 1.0;
+            let originalBase = lineGrossTotalWithTax / taxDivisor;
+            let itemTaxAmount = parseFloat((originalBase * (taxRate / 100)).toFixed(2));
+
+            let taxId = item.taxType === 'INC' ? 4 : 1;
+            let roundedBase = parseFloat(originalBase.toFixed(2));
+
+            let taxKey = `${taxId}_${taxRate}`;
+            if (!taxesMap[taxKey]) taxesMap[taxKey] = { tax_id: taxId, percent: taxRate, tax_amount: 0.0, taxable_amount: 0.0 };
+            taxesMap[taxKey].tax_amount += itemTaxAmount;
+            taxesMap[taxKey].taxable_amount += originalBase;
+
+            sumTaxExclusiveTotal += roundedBase;
+            sumTotalTaxes += itemTaxAmount;
+
+            itemsList.push({
+                unit_measure_id: 70,
+                line_extension_amount: roundedBase,
+                free_of_charge_indicator: false,
+                allowance_charges: [],
+                tax_totals: [{ tax_id: taxId, percent: taxRate, tax_amount: itemTaxAmount, taxable_amount: roundedBase }],
+                description: item.name || 'Cobro Adicional / Interés',
+                notes: "",
+                code: "ND_ITEM",
+                type_item_identification_id: 1,
+                price_amount: parseFloat((originalBase / quantity).toFixed(2)),
+                base_quantity: quantity,
+                invoiced_quantity: quantity
+            });
+        });
+
+        let sumTaxInclusiveTotal = sumTaxExclusiveTotal + sumTotalTaxes;
+        let allTaxTotals = Object.values(taxesMap).map(t => ({
+            tax_id: t.tax_id, percent: t.percent, tax_amount: parseFloat(t.tax_amount.toFixed(2)), taxable_amount: parseFloat(t.taxable_amount.toFixed(2))
+        }));
+
+        const ndSnap = await db.collection('companies').doc(companyId).collection('debit_notes').count().get();
+        const currentNdNumber = ndSnap.data().count + 1;
+
+        const now = new Date();
+        const colTime = new Date(now.getTime() - (5 * 60 * 60 * 1000));
+        const dateStr = colTime.toISOString().split('T')[0];
+        const timeStr = colTime.toISOString().split('T')[1].split('.')[0];
+
+        const ndPrefix = feConfig.isTestEnvironment ? "NDTT" : "ND";
+
+        // 3. PAYLOAD DE NOTA DÉBITO
+        const payload = {
+            prefix: ndPrefix,
+            number: currentNdNumber,
+            date: dateStr,
+            time: timeStr,
+            send_email: true,
+            invoiceReference: {
+                number: originalPrefix + originalNumber,
+                uuid: originalCufe,
+                issue_date: originalDateStr
+            },
+            discrepancy: {
+                code: reasonCode || 3, // Code 3: Cambio del valor
+                description: reasonDescription || "Intereses de mora / Valor adicional"
+            },
+            customer: {
+                identification_number: (client.idNumber || '').replace(/[^0-9]/g, ''), dv: calculateDV(client.idNumber),
+                name: client.name || 'Cliente', phone: (client.phone || '').replace(/[^0-9]/g, ''), address: client.address || "No registra",
+                email: client.email || '', merchant_registration: "00000000", type_document_identification_id: mapDocType(client.idType),
+                type_organization_id: client.personType === '1' ? 1 : 2, type_liability_id: 117,
+                municipality_code: client.daneCode || "11001", type_regime_id: client.taxRegime === '48' ? 0 : 1
+            },
+            payment: {
+                payment_form_id: 1,
+                payment_method_id: 10,
+                payment_due_date: dateStr,
+                duration_measure: "0"
+            },
+            items: itemsList,
+            resolution: feConfig.resolutionNumber,
+            allowanceTotal: 0,
+            invoiceBaseTotal: parseFloat(sumTaxExclusiveTotal.toFixed(2)),
+            invoiceTaxExclusiveTotal: parseFloat(sumTaxExclusiveTotal.toFixed(2)),
+            invoiceTaxInclusiveTotal: parseFloat(sumTaxInclusiveTotal.toFixed(2)),
+            totalToPay: parseFloat(sumTaxInclusiveTotal.toFixed(2)),
+            allTaxTotals: allTaxTotals
+        };
+
+        const plemsiUrl = feConfig.isTestEnvironment 
+            ? "https://pruebas.plemsi.com/api/billing/debit" 
+            : "https://api.plemsi.com/api/billing/debit";
+
+        const response = await axios.post(plemsiUrl, payload, {
+            headers: { "Authorization": `Bearer ${PLEMSI_MASTER_API_KEY}`, "Content-Type": "application/json" },
+            validateStatus: status => status < 600
+        });
+
+        if (response.data.success) {
+            await db.collection('companies').doc(companyId).collection('debit_notes').add({
+                ndPrefix: ndPrefix,
+                ndNumber: currentNdNumber,
+                originalFactura: originalPrefix + originalNumber,
+                cude: response.data.data.cude,
+                totalAdded: sumTaxInclusiveTotal,
+                reason: reasonDescription,
+                date: admin.firestore.FieldValue.serverTimestamp()
+            });
+
+            return { status: 'Aceptada', cude: response.data.data.cude };
+        } else {
+            console.error("Rechazo DIAN (Nota Débito):", JSON.stringify(response.data));
+            return { status: 'Rechazada', error: response.data.message || 'Rechazado por la DIAN' };
+        }
+    } catch (error) {
+        console.error("Error crítico emitiendo Nota Débito:", error);
+        throw new HttpsError('internal', 'Fallo conectando al servidor.');
+    }
+});
