@@ -60,14 +60,25 @@ class CashRepository {
     final startOfDay = DateTime(now.year, now.month, now.day);
     final endOfDay = startOfDay.add(const Duration(days: 1));
 
-    // A. VENTAS (Ingresos)
-    final salesQuery = await _firestore
-        .collection('companies')
-        .doc(companyId)
-        .collection('sales')
-        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
-        .get();
+    // A. VENTAS (Ingresos) - Con fallback inmediato a caché
+    QuerySnapshot<Map<String, dynamic>> salesQuery;
+    try {
+      salesQuery = await _firestore
+          .collection('companies')
+          .doc(companyId)
+          .collection('sales')
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('date', isLessThan: Timestamp.fromDate(endOfDay))
+          .get(const GetOptions(source: Source.serverAndCache));
+    } catch (_) {
+      salesQuery = await _firestore
+          .collection('companies')
+          .doc(companyId)
+          .collection('sales')
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+          .where('date', isLessThan: Timestamp.fromDate(endOfDay))
+          .get(const GetOptions(source: Source.cache));
+    }
 
     double totalCashSales = 0;
 
@@ -203,9 +214,23 @@ class CashRepository {
   // Trae el último saldo que dejó en la caja
   Future<double> getBaseDraft(String userId) async {
     final docId = '${userId}_next_base';
-    
-    final doc = await _firestore.collection('companies').doc(companyId).collection('cash_drafts').doc(docId).get();
-    if (doc.exists) return (doc.data()?['base'] ?? 0).toDouble();
+    try {
+      final doc = await _firestore
+          .collection('companies')
+          .doc(companyId)
+          .collection('cash_drafts')
+          .doc(docId)
+          .get(const GetOptions(source: Source.serverAndCache));
+      if (doc.exists) return (doc.data()?['base'] ?? 0).toDouble();
+    } catch (_) {
+      final doc = await _firestore
+          .collection('companies')
+          .doc(companyId)
+          .collection('cash_drafts')
+          .doc(docId)
+          .get(const GetOptions(source: Source.cache));
+      if (doc.exists) return (doc.data()?['base'] ?? 0).toDouble();
+    }
     return 0;
   }
 

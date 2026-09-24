@@ -65,31 +65,23 @@ class FinanceRepository {
   /// Agrega una transacción simple (Ingreso o Gasto) y actualiza el saldo de forma atómica
   Future<void> addTransaction(BankTransaction tx) async {
     final accountDoc = _accountsRef.doc(tx.accountId);
+    final newTxRef = _transactionsRef(tx.accountId).doc();
     
-    // Usamos runTransaction para evitar problemas de concurrencia
-    await _firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(accountDoc);
-      if (!snapshot.exists) throw Exception("La cuenta no existe");
+    // Determinar si suma o resta
+    final bool isAddition = ['DEPOSIT', 'SALE', 'INCOME', 'TRANSFER_IN'].contains(tx.type);
+    final double delta = isAddition ? tx.amount : -tx.amount;
 
-      final currentBalance = ((snapshot.data() as Map<String, dynamic>)['balance'] ?? 0).toDouble();
-      double newBalance;
+    final batch = _firestore.batch();
+    
+    // 1. Guardar la transacción
+    batch.set(newTxRef, tx.toMap());
 
-      // Determinar si suma o resta
-      // DEPOSIT, SALE, INCOME, TRANSFER_IN -> Suman
-      // WITHDRAWAL, EXPENSE, TRANSFER_OUT -> Restan
-      if (['DEPOSIT', 'SALE', 'INCOME', 'TRANSFER_IN'].contains(tx.type)) {
-        newBalance = currentBalance + tx.amount;
-      } else {
-        newBalance = currentBalance - tx.amount;
-      }
+    // 2. Actualizar el saldo usando FieldValue.increment (Funciona ONLINE y OFFLINE)
+    batch.set(accountDoc, {
+      'balance': FieldValue.increment(delta),
+    }, SetOptions(merge: true));
 
-      // 1. Guardar la transacción
-      final newTxRef = _transactionsRef(tx.accountId).doc();
-      transaction.set(newTxRef, tx.toMap());
-
-      // 2. Actualizar el saldo de la cuenta
-      transaction.update(accountDoc, {'balance': newBalance});
-    });
+    await batch.commit();
   }
 
   // ==============================================================================

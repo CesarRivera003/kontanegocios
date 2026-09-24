@@ -5,6 +5,9 @@ import '../../auth/presentation/auth_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../auth/domain/user_model.dart';
 import '../../settings/data/settings_repository.dart';
+import '../../../shared/widgets/network_status_banner.dart';
+import '../../../core/services/network_connectivity_service.dart';
+import '../../../core/services/sync_queue_service.dart';
 
 class DashboardShell extends ConsumerStatefulWidget {
   final Widget child;
@@ -112,6 +115,15 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
     
     final int mobileIndex = mobileDestinations.indexWhere((e) => location.startsWith(e.route)).clamp(0, mobileDestinations.length - 1);
 
+    // --- LISTENER AUTOMÁTICO DE RECONEXIÓN ---
+    ref.listen<NetworkStatus>(networkConnectivityProvider, (previous, next) {
+      // Si la conexión acaba de volver, disparamos la retransmisión
+      if (next == NetworkStatus.restored || 
+         (previous == NetworkStatus.offline && next == NetworkStatus.online)) {
+        ref.read(syncQueueServiceProvider.notifier).syncPendingSales();
+      }
+    });
+    
     return LayoutBuilder(
       builder: (context, constraints) {
         // --- DISEÑO PC ---
@@ -165,7 +177,14 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
                   }
                 ),
                 const VerticalDivider(thickness: 1, width: 1),
-                Expanded(child: widget.child),
+                Expanded(
+                  child: Column(
+                    children: [
+                      const NetworkStatusBanner(),
+                      Expanded(child: widget.child),
+                    ],
+                  ),
+                ),
               ],
             ),
           );
@@ -260,7 +279,12 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
               ),
             ),
             
-            body: widget.child,
+            body: Column(
+              children: [
+                const NetworkStatusBanner(),
+                Expanded(child: widget.child),
+              ],
+            ),
 
             bottomNavigationBar: NavigationBar(
               selectedIndex: mobileIndex,

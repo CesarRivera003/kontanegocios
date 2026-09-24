@@ -16,6 +16,7 @@ import '../../finance/presentation/finance_providers.dart';
 import '../../finance/domain/finance_model.dart';
 import '../../clients/presentation/client_providers.dart';
 import '../../clients/domain/client_model.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class CheckoutModal extends ConsumerStatefulWidget {
   const CheckoutModal({super.key});
@@ -225,7 +226,11 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         deadline = creditPayment.paymentDeadline;
       } catch (_) {}
 
-      // 2. GUARDAR VENTA Y ATRAPAR LA VENTA REAL (CON POS-0001 Y DIAN)
+      // Leemos si estamos online u offline
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+
+      // 2. GUARDAR VENTA
       final newSale = await ref.read(salesRepositoryProvider).processSale(
         cartItems: cart.items,
         total: realTotalSale, 
@@ -237,7 +242,18 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         customId: officialId,
         isElectronicInvoice: _generateElectronicInvoice,  
         client: clienteParaFactura,
+        isOnline: isOnline, // <-- PASAMOS LA CONECTIVIDAD AQUÍ
       );
+
+      if (!isOnline && _generateElectronicInvoice) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('ℹ️ Venta guardada localmente. La Factura DIAN se transmitirá automáticamente al reconectar.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
 
       // 3. REGISTRAR EN TESORERÍA (CON DESCUENTO DE VUELTAS)
       final financeRepo = ref.read(financeRepositoryProvider);
