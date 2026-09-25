@@ -288,7 +288,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
             id: '', accountId: targetAccountId, type: 'SALE', amount: amountToRegister, 
             description: 'Venta #${newSale.ticketNumber ?? officialId} - ${cart.clientName}', 
             date: DateTime.now(), relatedDocId: officialId
-          ));
+          )).timeout(const Duration(seconds: 2), onTimeout: () {});
         }
       }
 
