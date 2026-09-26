@@ -238,10 +238,42 @@ class SalesRepository {
     }
   }
 
-  // 4. REGISTRAR ABONO
-  Future<void> addPaymentToSale(String saleId, SalePayment payment) async {
-    await _firestore.collection('companies').doc(userId).collection('sales').doc(saleId)
-        .set({'payments': FieldValue.arrayUnion([payment.toMap()])}, SetOptions(merge: true));
+  // 4. REGISTRAR ABONO (HÍBRIDO ONLINE / OFFLINE)
+  Future<void> addPaymentToSale(
+    String saleId, 
+    SalePayment payment, {
+    bool isOnline = true,
+  }) async {
+    try {
+      final docRef = _firestore
+          .collection('companies')
+          .doc(userId)
+          .collection('sales')
+          .doc(saleId);
+
+      final updateFuture = docRef.set({
+        'payments': FieldValue.arrayUnion([payment.toMap()]),
+        // Si estamos offline marcamos que hubo movimiento pendiente de sincronizar
+        if (!isOnline) 'needsSync': true,
+      }, SetOptions(merge: true));
+
+      if (!isOnline) {
+        // En offline: no bloqueamos la UI con await
+        updateFuture.catchError((err) {
+          debugPrint("Abono guardado en cola local: $err");
+        });
+      } else {
+        // En online: esperamos con un timeout preventivo de 2.5 segundos
+        try {
+          await updateFuture.timeout(const Duration(milliseconds: 2500));
+        } catch (e) {
+          debugPrint("Timeout de red en abono. Guardando en local: $e");
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ Error registrando abono: $e");
+      rethrow;
+    }
   }
 
   // 5. OBTENER VENTAS POR FECHA
