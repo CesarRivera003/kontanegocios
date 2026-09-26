@@ -4,16 +4,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
-/// Estados posibles de la conexión a internet en la aplicación.
 enum NetworkStatus {
-  online,   // Hay conexión funcional a internet.
-  offline,  // No hay red o no hay salida real a internet.
-  restored, // La conexión se acaba de restablecer (feedback visual temporal).
+  online,
+  offline,
+  restored,
 }
 
-/// Notifier que monitoriza en tiempo real el estado de la red.
-/// 
-/// Diseñado para Riverpod 3.x y compatible de forma nativa con Android, Windows y Web.
 class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
   final Connectivity _connectivity = Connectivity();
   StreamSubscription<List<ConnectivityResult>>? _subscription;
@@ -22,23 +18,17 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
 
   @override
   NetworkStatus build() {
-    // Liberación segura de memoria cuando el provider se destruye
     ref.onDispose(() {
       _subscription?.cancel();
       _restoredTimer?.cancel();
     });
 
-    // Iniciar la verificación en segundo plano
     _initConnectivity();
-
-    // Estado inicial por defecto
     return NetworkStatus.online;
   }
 
-  /// Inicializa la verificación al arrancar y suscribe el Stream de cambios.
   Future<void> _initConnectivity() async {
     try {
-      // 1. Verificación inicial de adaptadores de red
       final List<ConnectivityResult> initialResults =
           await _connectivity.checkConnectivity();
       await _handleConnectivityChange(initialResults);
@@ -46,7 +36,6 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
       debugPrint("⚠️ [ConnectivityService] Error en chequeo inicial: $e");
     }
 
-    // 2. Escuchar cambios de red en tiempo real (Wi-Fi, Datos, Ethernet o desconexión)
     _subscription = _connectivity.onConnectivityChanged.listen(
       (List<ConnectivityResult> results) {
         _handleConnectivityChange(results);
@@ -57,9 +46,7 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
     );
   }
 
-  /// Evalúa la lista de conexiones devueltas por connectivity_plus 7.x
   Future<void> _handleConnectivityChange(List<ConnectivityResult> results) async {
-    // Si no hay adaptadores activos o la lista indica desconexión total
     final bool hasNoNetwork =
         results.isEmpty || results.contains(ConnectivityResult.none);
 
@@ -68,8 +55,8 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
       return;
     }
 
-    // Si hay adaptador activo (Wi-Fi, Datos, Ethernet), verificamos si hay acceso real
-    final bool hasRealInternet = await _checkRealInternetAccess();
+    // Comprobamos salida real
+    final bool hasRealInternet = await _checkRealInternetAccess(results);
 
     if (!hasRealInternet) {
       _setOffline();
@@ -78,7 +65,6 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
     }
   }
 
-  /// Marca el estado como desconectado
   void _setOffline() {
     _restoredTimer?.cancel();
     _wasOffline = true;
@@ -87,14 +73,11 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
     }
   }
 
-  /// Marca el estado como conectado y gestiona la transición visual "restored"
   void _setOnline() {
     if (_wasOffline) {
-      // Estaba offline y acaba de regresar la señal
       _wasOffline = false;
       state = NetworkStatus.restored;
 
-      // Mantener el aviso verde durante 4 segundos antes de ocultarlo
       _restoredTimer?.cancel();
       _restoredTimer = Timer(const Duration(seconds: 4), () {
         if (state == NetworkStatus.restored) {
@@ -106,31 +89,34 @@ class NetworkConnectivityNotifier extends Notifier<NetworkStatus> {
     }
   }
 
-  /// Comprueba si realmente existe salida a internet hacia el exterior.
-  Future<bool> _checkRealInternetAccess() async {
-    // En Flutter Web, el navegador gestiona los sockets y aplicar un ping manual
-    // puede arrojar bloqueos de CORS (XMLHttpRequest).
-    if (kIsWeb) return true;
+  /// Verificación de conectividad real diferenciada por plataforma
+  Future<bool> _checkRealInternetAccess(List<ConnectivityResult> results) async {
+    // EN WEB:
+    // 1. ConnectivityResult.none ya descartó si el navegador no tiene red.
+    // 2. No hacemos http.get a dominios de terceros para evitar bloqueo CORS.
+    // Si connectivity_plus detecta wifi/ethernet/mobile en web, estamos online.
+    if (kIsWeb) {
+      return !results.contains(ConnectivityResult.none);
+    }
 
+    // EN MÓVIL Y DESKTOP:
+    // Aquí sí podemos hacer el ping ligero sin problemas de CORS.
     try {
-      // Petición ultra ligera con timeout estricto de 2.5 segundos
       final response = await http
           .get(Uri.parse('https://clients3.google.com/generate_204'))
           .timeout(const Duration(milliseconds: 2500));
       return response.statusCode == 204;
     } catch (_) {
-      return false; // Error de timeout, DNS caído o Wi-Fi sin salida a internet
+      return false;
     }
   }
 
-  /// Método público para forzar un re-chequeo manual en cualquier momento
   Future<void> checkConnectionNow() async {
     final results = await _connectivity.checkConnectivity();
     await _handleConnectivityChange(results);
   }
 }
 
-/// Provider global accesible desde cualquier widget o servicio de la app
 final networkConnectivityProvider =
     NotifierProvider<NetworkConnectivityNotifier, NetworkStatus>(
   NetworkConnectivityNotifier.new,
