@@ -230,20 +230,6 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
       final networkStatus = ref.read(networkConnectivityProvider);
       final bool isOnline = networkStatus != NetworkStatus.offline;
 
-      // 2. GUARDAR VENTA
-      final newSale = await ref.read(salesRepositoryProvider).processSale(
-        cartItems: cart.items,
-        total: realTotalSale, 
-        paymentMethods: _payments, 
-        paymentDeadline: deadline,
-        clientName: cart.clientName,
-        sellerName: finalSellerName,
-        additionalCosts: allCosts,
-        customId: officialId,
-        isElectronicInvoice: _generateElectronicInvoice,  
-        client: clienteParaFactura,
-        isOnline: isOnline, // <-- PASAMOS LA CONECTIVIDAD AQUÍ
-      );
 
       if (!isOnline && _generateElectronicInvoice) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -256,27 +242,32 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
       }
 
       // 3. REGISTRAR EN TESORERÍA (CON DESCUENTO DE VUELTAS)
-      final financeRepo = ref.read(financeRepositoryProvider);
-      
+
+      // 1. Preparar transacciones de Tesorería antes de procesar
+      final List<Map<String, dynamic>> financeTxs = [];
+      double remainingChange = changeRemaining;
+
       for (var payment in _payments) {
         String? targetAccountId;
-        double amountToRegister = payment.amount; 
+        double amountToRegister = payment.amount;
 
         if (payment.method == 'Efectivo') {
-          final cashAccount = accounts.firstWhere((a) => a.isDefault && a.isCash && a.isActive, orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first));
+          final cashAccount = accounts.firstWhere(
+            (a) => a.isDefault && a.isCash && a.isActive,
+            orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first),
+          );
           targetAccountId = cashAccount.id;
 
-          if (changeRemaining > 0) {
-            if (amountToRegister >= changeRemaining) {
-              amountToRegister -= changeRemaining;
-              changeRemaining = 0; 
+          if (remainingChange > 0) {
+            if (amountToRegister >= remainingChange) {
+              amountToRegister -= remainingChange;
+              remainingChange = 0;
             } else {
-              changeRemaining -= amountToRegister;
+              remainingChange -= amountToRegister;
               amountToRegister = 0;
             }
           }
-        } 
-        else if (payment.method == 'Transferencia' && payment.bankName != null) {
+        } else if (payment.method == 'Transferencia' && payment.bankName != null) {
           try {
             final bankAccount = accounts.firstWhere((a) => a.name == payment.bankName);
             targetAccountId = bankAccount.id;
@@ -284,20 +275,37 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         }
 
         if (targetAccountId != null && amountToRegister > 0) {
-          await financeRepo.addTransaction(BankTransaction(
-            id: '', accountId: targetAccountId, type: 'SALE', amount: amountToRegister, 
-            description: 'Venta #${newSale.ticketNumber ?? officialId} - ${cart.clientName}', 
-            date: DateTime.now(), relatedDocId: officialId
-          )).timeout(const Duration(seconds: 2), onTimeout: () {});
+          financeTxs.add({
+            'accountId': targetAccountId,
+            'type': 'SALE',
+            'amount': amountToRegister,
+            'description': 'Venta - ${cart.clientName}',
+            'date': Timestamp.fromDate(DateTime.now()),
+            'relatedDocId': officialId,
+          });
         }
       }
 
-      // 4. ÉXITO Y LIMPIEZA
+      // 2. Procesar venta pasando las transacciones para ejecución local en batch
+      final newSale = await ref.read(salesRepositoryProvider).processSale(
+        cartItems: cart.items,
+        total: realTotalSale, 
+        paymentMethods: _payments, 
+        paymentDeadline: deadline,
+        clientName: cart.clientName,
+        sellerName: finalSellerName,
+        additionalCosts: allCosts,
+        customId: officialId,
+        isElectronicInvoice: _generateElectronicInvoice,  
+        client: clienteParaFactura,
+        isOnline: isOnline,
+        pendingFinanceTransactions: financeTxs, // <-- Transacciones en el mismo batch
+      );
+
+      // 3. Éxito inmediato (el modal cierra sin esperar red)
       if (mounted) {
         ref.read(cartProvider.notifier).clear(); 
         Navigator.of(context).pop(); 
-        
-        // ¡Enviamos la venta real devuelta por la base de datos!
         _showSuccessDialog(context, newSale, companyProfile);
       }
 
