@@ -231,62 +231,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
       final bool isOnline = networkStatus != NetworkStatus.offline;
 
 
-      if (!isOnline && _generateElectronicInvoice) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('ℹ️ Venta guardada localmente. La Factura DIAN se transmitirá automáticamente al reconectar.'),
-            backgroundColor: Colors.orange,
-            duration: Duration(seconds: 4),
-          ),
-        );
-      }
-
-      // 3. REGISTRAR EN TESORERÍA (CON DESCUENTO DE VUELTAS)
-
-      // 1. Preparar transacciones de Tesorería antes de procesar
-      final List<Map<String, dynamic>> financeTxs = [];
-      double remainingChange = changeRemaining;
-
-      for (var payment in _payments) {
-        String? targetAccountId;
-        double amountToRegister = payment.amount;
-
-        if (payment.method == 'Efectivo') {
-          final cashAccount = accounts.firstWhere(
-            (a) => a.isDefault && a.isCash && a.isActive,
-            orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first),
-          );
-          targetAccountId = cashAccount.id;
-
-          if (remainingChange > 0) {
-            if (amountToRegister >= remainingChange) {
-              amountToRegister -= remainingChange;
-              remainingChange = 0;
-            } else {
-              remainingChange -= amountToRegister;
-              amountToRegister = 0;
-            }
-          }
-        } else if (payment.method == 'Transferencia' && payment.bankName != null) {
-          try {
-            final bankAccount = accounts.firstWhere((a) => a.name == payment.bankName);
-            targetAccountId = bankAccount.id;
-          } catch (_) {}
-        }
-
-        if (targetAccountId != null && amountToRegister > 0) {
-          financeTxs.add({
-            'accountId': targetAccountId,
-            'type': 'SALE',
-            'amount': amountToRegister,
-            'description': 'Venta - ${cart.clientName}',
-            'date': Timestamp.fromDate(DateTime.now()),
-            'relatedDocId': officialId,
-          });
-        }
-      }
-
-      // 2. Procesar venta pasando las transacciones para ejecución local en batch
+      // 2. GUARDAR VENTA
       final newSale = await ref.read(salesRepositoryProvider).processSale(
         cartItems: cart.items,
         total: realTotalSale, 
@@ -299,10 +244,77 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         isElectronicInvoice: _generateElectronicInvoice,  
         client: clienteParaFactura,
         isOnline: isOnline,
-        pendingFinanceTransactions: financeTxs, // <-- Transacciones en el mismo batch
       );
 
-      // 3. Éxito inmediato (el modal cierra sin esperar red)
+      if (!isOnline && _generateElectronicInvoice) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('ℹ️ Venta guardada localmente. La Factura DIAN se transmitirá automáticamente al reconectar.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 4),
+          ),
+        );
+      }
+
+      // 3. REGISTRAR EN TESORERÍA (RESTAURADO CON SOPORTE OFFLINE)
+      final financeRepo = ref.read(financeRepositoryProvider);
+      
+      for (var payment in _payments) {
+        String? targetAccountId;
+        double amountToRegister = payment.amount; 
+
+        if (payment.method == 'Efectivo') {
+          final cashAccount = accounts.firstWhere(
+            (a) => a.isDefault && a.isCash && a.isActive, 
+            orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first),
+          );
+          targetAccountId = cashAccount.id;
+
+          if (changeRemaining > 0) {
+            if (amountToRegister >= changeRemaining) {
+              amountToRegister -= changeRemaining;
+              changeRemaining = 0; 
+            } else {
+              changeRemaining -= amountToRegister;
+              amountToRegister = 0;
+            }
+          }
+        } else if (payment.method == 'Transferencia' && payment.bankName != null) {
+          try {
+            final bankAccount = accounts.firstWhere((a) => a.name == payment.bankName);
+            targetAccountId = bankAccount.id;
+          } catch (_) {}
+        }
+
+        if (targetAccountId != null && amountToRegister > 0) {
+          final transaction = BankTransaction(
+            id: '', 
+            accountId: targetAccountId, 
+            type: 'SALE', 
+            amount: amountToRegister, 
+            description: 'Venta #${newSale.ticketNumber ?? officialId} - ${cart.clientName}', 
+            date: DateTime.now(), 
+            relatedDocId: officialId,
+          );
+
+          if (isOnline) {
+            // Online: esperamos confirmación con límite de 2 segundos
+            try {
+              await financeRepo.addTransaction(transaction).timeout(const Duration(seconds: 2));
+            } catch (e) {
+              debugPrint("Timeout registrando transacción en red: $e");
+            }
+          } else {
+            // Offline: disparamos la transacción al repositorio local sin await bloqueante
+            // Firestore la escribe en IndexedDB/caché y actualizará el saldo de la caja de inmediato
+            financeRepo.addTransaction(transaction).catchError((err) {
+              debugPrint("Transacción de tesorería guardada en cola local: $err");
+            });
+          }
+        }
+      }
+
+      // 4. ÉXITO Y LIMPIEZA
       if (mounted) {
         ref.read(cartProvider.notifier).clear(); 
         Navigator.of(context).pop(); 
