@@ -283,26 +283,36 @@ class FinanceScreen extends ConsumerWidget {
                   final bool isOnline = networkStatus != NetworkStatus.offline;
 
                   final financeRepo = ref.read(financeRepositoryProvider);
-                  final transferFuture = financeRepo.transferFunds(
-                    sourceAccountId: sourceId!,
-                    destinationAccountId: destId!,
-                    amount: amount,
-                    description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
-                  );
-
+                  
                   if (isOnline) {
                     try {
-                      await transferFuture.timeout(const Duration(seconds: 2));
-                    } catch (_) {}
+                      await financeRepo.transferFunds(
+                        sourceAccountId: sourceId!,
+                        destinationAccountId: destId!,
+                        amount: amount,
+                        description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
+                      ).timeout(const Duration(seconds: 3));
+                    } catch (e) {
+                      debugPrint("Timeout de red en transferencia: $e");
+                    }
                   } else {
-                    transferFuture.catchError((_) {});
+                    // En offline: NO USAR AWAIT NI TIMEOUT
+                    // Se despacha directamente al caché local de Firestore
+                    financeRepo.transferFunds(
+                      sourceAccountId: sourceId!,
+                      destinationAccountId: destId!,
+                      amount: amount,
+                      description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
+                    ).catchError((err) {
+                      debugPrint("Transferencia encolada en caché local: $err");
+                    });
                   }
                   
                   if (context.mounted) {
                     Navigator.pop(ctx);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text(isOnline ? "Transferencia exitosa" : "ℹ️ Transferencia registrada localmente"), 
+                        content: Text(isOnline ? "Transferencia exitosa" : "ℹ️ Transferencia registrada localmente (se sincronizará al conectar)"), 
                         backgroundColor: isOnline ? Colors.green : Colors.orange
                       )
                     );
