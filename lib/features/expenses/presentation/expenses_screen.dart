@@ -14,6 +14,7 @@ import 'expense_providers.dart';
 import 'accounts_payable_screen.dart'; 
 
 import '../../finance/presentation/finance_providers.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class ExpensesScreen extends ConsumerStatefulWidget {
   final int initialIndex;
@@ -116,6 +117,21 @@ class _ExpensesHistoryTabState extends ConsumerState<_ExpensesHistoryTab> {
   }
 
   void _confirmDeleteExpense(Expense expense) {
+    // 🔒 REGLA DE SEGURIDAD OFFLINE
+    final networkStatus = ref.read(networkConnectivityProvider);
+    final bool isOnline = networkStatus != NetworkStatus.offline;
+
+    if (!isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('⚠️ No es posible eliminar gastos sin conexión a internet.'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      return;
+    }
+
     if (expense.isPending && expense.payments.isNotEmpty) {
       showDialog(
         context: context,
@@ -166,13 +182,12 @@ class _ExpensesHistoryTabState extends ConsumerState<_ExpensesHistoryTab> {
                   await financeRepo.registerReversal(
                     amount: expense.amount, 
                     isCash: expense.paymentMethod == 'Efectivo',
-                    // SALVAVIDAS APLICADO AQUÍ
                     bankName: expense.bankName ?? (expense.paymentMethod == 'Transferencia' ? 'Bancolombia' : null),
                     description: 'Anulación Gasto: ${expense.description}'
-                  );
+                  ).timeout(const Duration(seconds: 3));
                 }
 
-                await ref.read(expenseRepositoryProvider).deleteExpense(expense.id);
+                await ref.read(expenseRepositoryProvider).deleteExpense(expense.id).timeout(const Duration(seconds: 3));
 
                 if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(

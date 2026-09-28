@@ -12,6 +12,7 @@ import '../../settings/data/settings_repository.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../finance/presentation/finance_providers.dart';
 import '../../finance/domain/finance_model.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class AccountsPayableScreen extends ConsumerStatefulWidget {
   const AccountsPayableScreen({super.key});
@@ -282,8 +283,11 @@ class _AccountsPayableScreenState extends ConsumerState<AccountsPayableScreen> {
                 ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Monto inválido')));
                 return;
               }
+
+              // 1. Detectar si hay conexión a internet
+              final networkStatus = ref.read(networkConnectivityProvider);
+              final bool isOnline = networkStatus != NetworkStatus.offline;
               
-              // SALVAVIDAS: Atrapamos cualquier error para que el modal no se quede trabado
               try {
                 final userProfile = ref.read(userProfileProvider).value;
                 
@@ -297,9 +301,17 @@ class _AccountsPayableScreenState extends ConsumerState<AccountsPayableScreen> {
                   bankName: selectedBankId != null ? accountsAsync.asData?.value.firstWhere((a) => a.id == selectedBankId).name : null, 
                 );
 
-                await ref.read(expenseRepositoryProvider).addPayment(expense.id, payment);
+                // 2. GUARDAR ABONO EN GASTOS (sin await bloqueante si está offline)
+                final expenseRepo = ref.read(expenseRepositoryProvider);
+                if (isOnline) {
+                  try {
+                    await expenseRepo.addPayment(expense.id, payment).timeout(const Duration(seconds: 2));
+                  } catch (_) {}
+                } else {
+                  expenseRepo.addPayment(expense.id, payment).catchError((_) {});
+                }
 
-                // INTEGRACIÓN TESORERÍA BLINDADA
+                // 3. INTEGRACIÓN CON TESORERÍA
                 final financeRepo = ref.read(financeRepositoryProvider);
                 final accounts = accountsAsync.asData?.value ?? [];
                 String? targetAccountId;
@@ -315,7 +327,7 @@ class _AccountsPayableScreenState extends ConsumerState<AccountsPayableScreen> {
                 }
 
                 if (targetAccountId != null) {
-                  await financeRepo.addTransaction(BankTransaction(
+                  final tx = BankTransaction(
                     id: '',
                     accountId: targetAccountId,
                     type: 'EXPENSE',
@@ -323,12 +335,27 @@ class _AccountsPayableScreenState extends ConsumerState<AccountsPayableScreen> {
                     description: 'Pago Gasto: ${expense.provider} - ${expense.category}',
                     date: DateTime.now(),
                     relatedDocId: expense.id,
-                  ));
+                  );
+
+                  if (isOnline) {
+                    try {
+                      await financeRepo.addTransaction(tx).timeout(const Duration(seconds: 2));
+                    } catch (_) {}
+                  } else {
+                    financeRepo.addTransaction(tx).catchError((_) {});
+                  }
                 }
 
                 if (context.mounted) {
                   Navigator.pop(ctx);
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Abono registrado y descontado de caja'), backgroundColor: Colors.green));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isOnline 
+                        ? 'Abono registrado y descontado de caja'
+                        : 'ℹ️ Abono guardado localmente (se sincronizará al conectar)'), 
+                      backgroundColor: isOnline ? Colors.green : Colors.orange,
+                    ),
+                  );
                 }
               } catch (e) {
                 if (context.mounted) {
