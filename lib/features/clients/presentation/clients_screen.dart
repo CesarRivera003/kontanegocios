@@ -6,9 +6,8 @@ import 'client_providers.dart';
 import '../../clients/domain/client_model.dart';
 import '../../home/presentation/dashboard_shell.dart';
 import 'package:flutter/services.dart';
-
-// 1. IMPORTAR PERFIL PARA PERMISOS
 import '../../auth/presentation/user_profile_provider.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class ContactsScreen extends ConsumerStatefulWidget {
   const ContactsScreen({super.key});
@@ -383,10 +382,22 @@ Dirección: ${client.address} ${client.city}
           ),
           TextButton(
             onPressed: () {
-              ref.read(clientRepositoryProvider).deleteClient(clientId);
+              final networkStatus = ref.read(networkConnectivityProvider);
+              final bool isOnline = networkStatus != NetworkStatus.offline;
+
+              final repo = ref.read(clientRepositoryProvider);
+              if (isOnline) {
+                repo.deleteClient(clientId).timeout(const Duration(seconds: 2), onTimeout: () {});
+              } else {
+                repo.deleteClient(clientId).catchError((_) {});
+              }
+
               Navigator.pop(ctx);
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Cliente eliminado'), backgroundColor: Colors.red)
+                SnackBar(
+                  content: Text(isOnline ? 'Cliente eliminado' : 'ℹ️ Cliente eliminado localmente'),
+                  backgroundColor: isOnline ? Colors.red : Colors.orange,
+                )
               );
             },
             child: const Text('Eliminar', style: TextStyle(color: Colors.red)),
@@ -395,7 +406,7 @@ Dirección: ${client.address} ${client.city}
       ),
     );
   }
-  
+
   void _confirmDeleteProvider(BuildContext context, WidgetRef ref, String providerId, String name) {
     showDialog(
       context: context,
@@ -409,16 +420,23 @@ Dirección: ${client.address} ${client.city}
           ),
           TextButton(
             onPressed: () {
-              Navigator.pop(ctx); 
-              ref.read(providerRepositoryProvider).deleteProvider(providerId).then((_) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Proveedor eliminado correctamente'), backgroundColor: Colors.green)
-                );
-              }).catchError((e) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Error al eliminar: $e'), backgroundColor: Colors.red)
-                );
-              });
+              final networkStatus = ref.read(networkConnectivityProvider);
+              final bool isOnline = networkStatus != NetworkStatus.offline;
+
+              final repo = ref.read(providerRepositoryProvider);
+              if (isOnline) {
+                repo.deleteProvider(providerId).timeout(const Duration(seconds: 2), onTimeout: () {});
+              } else {
+                repo.deleteProvider(providerId).catchError((_) {});
+              }
+
+              Navigator.pop(ctx);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(isOnline ? 'Proveedor eliminado correctamente' : 'ℹ️ Proveedor eliminado localmente'),
+                  backgroundColor: isOnline ? Colors.green : Colors.orange,
+                )
+              );
             },
             child: const Text('ELIMINAR', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
           ),

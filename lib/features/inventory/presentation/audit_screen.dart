@@ -7,6 +7,7 @@ import 'inventory_providers.dart';
 import 'audit_history_screen.dart';
 import '../domain/audit_model.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class AuditScreen extends ConsumerStatefulWidget {
   const AuditScreen({super.key});
@@ -340,32 +341,49 @@ class _AuditScreenState extends ConsumerState<AuditScreen> {
         }
       });
 
-      // 3. GUARDAR STOCK (Solo los que cambiaron para ser eficientes)
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+
+      // 3. GUARDAR STOCK (Solo los que cambiaron)
       if (productsToUpdate.isNotEmpty) {
-        await repo.importProducts(productsToUpdate);
+        if (isOnline) {
+          try {
+            await repo.importProducts(productsToUpdate).timeout(const Duration(seconds: 3));
+          } catch (_) {}
+        } else {
+          repo.importProducts(productsToUpdate).catchError((_) {});
+        }
       }
 
-      // 4. GUARDAR EL LOG (Siempre, si se contó algo)
+      // 4. GUARDAR EL LOG DE AUDITORÍA
       if (logDetails.isNotEmpty) {
         final newLog = AuditLog(
           id: '', 
           date: DateTime.now(),
           totalGain: logTotalGain,
           totalLoss: logTotalLoss,
-          // Guardamos el total de items auditados, no solo los ajustados
           itemsAdjusted: logDetails.length, 
           details: logDetails,
         );
         
-        await repo.saveAuditLog(newLog);
+        if (isOnline) {
+          try {
+            await repo.saveAuditLog(newLog).timeout(const Duration(seconds: 3));
+          } catch (_) {}
+        } else {
+          repo.saveAuditLog(newLog).catchError((_) {});
+        }
       }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Auditoría guardada. ${logDetails.length} productos verificados (${itemsWithDifferences} con ajustes)."), 
-            backgroundColor: Colors.green
-          )
+            content: Text(isOnline 
+              ? "Auditoría guardada. ${logDetails.length} productos verificados (${itemsWithDifferences} con ajustes)."
+              : "ℹ️ Auditoría guardada localmente (${itemsWithDifferences} ajustes en cola)."
+            ), 
+            backgroundColor: isOnline ? Colors.green : Colors.orange,
+          ),
         );
         context.pop(); 
       }

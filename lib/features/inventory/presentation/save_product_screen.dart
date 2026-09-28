@@ -16,6 +16,7 @@ import '../../../shared/services/image_service.dart';
 import '../../auth/presentation/auth_providers.dart'; 
 import 'package:material_symbols_icons/symbols.dart';
 import '../../settings/data/settings_repository.dart'; 
+import '../../../core/services/network_connectivity_service.dart';
 
 class SaveProductScreen extends ConsumerStatefulWidget {
   final Product? productToEdit;
@@ -139,6 +140,9 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
     setState(() => _isLoading = true);
 
     try {
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+
       String productId = widget.productToEdit?.id.isNotEmpty == true 
           ? widget.productToEdit!.id 
           : DateTime.now().millisecondsSinceEpoch.toString();
@@ -146,14 +150,19 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
       String? finalImageUrl = widget.productToEdit?.imageUrl;
       bool imageUploadFailed = false;
 
+      // 1. MANEJO DE FOTO: Si está offline, no intentamos subir a Storage (evita congelar 30s)
       if (_newImageFile != null) {
-        try {
-          final companyId = ref.read(companyIdProvider).value; 
-          if (companyId != null) {
-            finalImageUrl = await _imageService.uploadProductImage(_newImageFile!, productId, companyId).timeout(const Duration(seconds: 30));
+        if (isOnline) {
+          try {
+            final companyId = ref.read(companyIdProvider).value; 
+            if (companyId != null) {
+              finalImageUrl = await _imageService.uploadProductImage(_newImageFile!, productId, companyId).timeout(const Duration(seconds: 10));
+            }
+          } catch (e) {
+            imageUploadFailed = true;
           }
-        } catch (e) {
-          imageUploadFailed = true;
+        } else {
+          imageUploadFailed = true; // Pendiente para cuando haya red
         }
       }
 
@@ -174,8 +183,6 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
       else if (_taxSelection == 'Impuesto al Consumo / INC (8%)') { dbTaxType = 'INC'; dbTaxRate = 8.0; }
       else if (_taxSelection == 'Bienes Exentos (0%)') { dbTaxType = 'EXENTO'; dbTaxRate = 0.0; }
 
-      // Nota: Ya no forzamos a EXCLUIDO si no es empresarial. Todos guardan su configuración.
-
       final product = Product(
         id: productId,
         name: _nameCtrl.text.trim(),
@@ -195,17 +202,35 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
         isService: _isService,
       );
 
-      await ref.read(inventoryRepositoryProvider).saveProduct(product);
+      // 2. GUARDADO EN FIRESTORE
+      final invRepo = ref.read(inventoryRepositoryProvider);
+      if (isOnline) {
+        try {
+          await invRepo.saveProduct(product).timeout(const Duration(seconds: 2));
+        } catch (_) {}
+      } else {
+        invRepo.saveProduct(product).catchError((_) {});
+      }
       
       ref.read(productCategoriesProvider.notifier).add(product.category);
       ref.read(productUnitsProvider.notifier).add(product.unit);
 
       if (mounted) {
         context.pop();
-        if (imageUploadFailed) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Guardado SIN FOTO (Internet inestable). Edítalo luego para subirla.'), backgroundColor: Colors.orange));
+        if (imageUploadFailed && _newImageFile != null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Guardado localmente. La foto se subirá al reconectar o editar.'), 
+              backgroundColor: Colors.orange,
+            ),
+          );
         } else {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Producto guardado exitosamente'), backgroundColor: Colors.green));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(isOnline ? 'Producto guardado exitosamente' : 'ℹ️ Producto guardado localmente'), 
+              backgroundColor: isOnline ? Colors.green : Colors.orange,
+            ),
+          );
         }
       }
     } catch (e) {
