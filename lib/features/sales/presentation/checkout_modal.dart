@@ -239,6 +239,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         paymentDeadline: deadline,
         clientName: cart.clientName,
         sellerName: finalSellerName,
+        userCode: userProfile?.userCode,
         additionalCosts: allCosts,
         customId: officialId,
         isElectronicInvoice: _generateElectronicInvoice,  

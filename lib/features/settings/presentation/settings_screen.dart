@@ -14,6 +14,7 @@ import '../../inventory/presentation/inventory_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../clients/presentation/client_providers.dart';
 import '../../../core/services/network_connectivity_service.dart';
+import '../../../core/utils/user_code_generator.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -181,9 +182,8 @@ class SettingsScreen extends ConsumerWidget {
           // NUEVO: CAMBIAR NOMBRE DE USUARIO
           _SettingsTile(
             icon: Icons.badge_outlined,
-            title: 'Mi Nombre',
-            // Muestra el nombre actual o "Usuario"
-            subtitle: userProfile?.name ?? 'Personalizar nombre',
+            title: userProfile?.name ?? 'Mi Nombre',
+            subtitle: 'ID: ${userProfile?.userCode ?? 'S/C'} • Usuario: @${userProfile?.username ?? 'sin_usuario'}',
             trailing: const Icon(Icons.edit, size: 16, color: Colors.blue),
             onTap: () => _showEditNameDialog(context, ref, userProfile),
           ),
@@ -429,16 +429,43 @@ class SettingsScreen extends ConsumerWidget {
                     final docSnap = await userRef.get();
                     
                     if (docSnap.exists) {
-                      // Si ya existe (cajero normal o admin ya registrado), solo actualizamos el nombre
-                      await userRef.update({'name': newName});
+                      // 1. SI YA EXISTE:
+                      final data = docSnap.data() ?? {};
+                      
+                      // Si no tenía userCode o username (usuarios viejos), se los generamos de una vez
+                      final String? existingCode = data['userCode'];
+                      final String? existingUsername = data['username'];
+
+                      Map<String, dynamic> updatePayload = {
+                        'name': newName,
+                      };
+
+                      // Si le faltaba el código (admin viejo -> A01, cajero viejo -> C01)
+                      if (existingCode == null || existingCode.isEmpty) {
+                        updatePayload['userCode'] = (data['role'] == 'admin' || user.role.name == 'admin') ? 'A01' : 'C01';
+                      }
+
+                      // Si le faltaba el username, se lo autogeneramos a partir de su nombre
+                      if (existingUsername == null || existingUsername.isEmpty) {
+                        updatePayload['username'] = UserCodeGenerator.generateUsername(
+                          fullName: newName,
+                          existingUsernames: [],
+                        );
+                      }
+
+                      await userRef.update(updatePayload);
                     } else {
-                      // Si NO existe (Es el dueño original la primera vez), creamos el perfil completo
-                      // para estandarizar la base de datos
+                      // 2. SI NO EXISTE (Dueño original la primera vez):
                       await userRef.set({
                         'id': user.id,
                         'name': newName,
                         'email': user.email,
                         'role': 'admin', // Forzamos el rol supremo
+                        'username': UserCodeGenerator.generateUsername(
+                          fullName: newName, 
+                          existingUsernames: [],
+                        ),
+                        'userCode': 'A01', // El administrador principal siempre conserva A01
                         'isActive': true,
                         'createdAt': FieldValue.serverTimestamp(),
                       });

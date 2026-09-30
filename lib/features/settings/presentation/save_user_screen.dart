@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../auth/domain/user_model.dart';
 import 'user_management_providers.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../auth/presentation/auth_providers.dart';
+import '../../../core/utils/user_code_generator.dart';
 
 class SaveUserScreen extends ConsumerStatefulWidget {
   final UserModel? userToEdit;
@@ -45,30 +48,68 @@ class _SaveUserScreenState extends ConsumerState<SaveUserScreen> {
       final repo = ref.read(userManagementRepositoryProvider);
 
       if (_isEditing) {
-        // ACTUALIZAR ROL O NOMBRE (No cambiamos password ni email aquí por seguridad simple)
+        // ACTUALIZAR ROL O NOMBRE (Mantiene su username y userCode originales)
         final updatedUser = UserModel(
           id: widget.userToEdit!.id,
-          email: _emailCtrl.text, // Mantenemos el email visualmente
+          email: _emailCtrl.text,
           name: _nameCtrl.text.trim(),
           role: _selectedRole,
           ownerId: widget.userToEdit!.ownerId,
           isActive: widget.userToEdit!.isActive,
+          username: widget.userToEdit!.username, // Conserva su username
+          userCode: widget.userToEdit!.userCode, // Conserva su código (ej: C01)
         );
         await repo.updateUser(updatedUser);
         
       } else {
-        // CREAR NUEVO USUARIO
+        // --- CREAR NUEVO USUARIO: AUTOGENERAR USERNAME Y USERCODE ---
+        final companyId = ref.read(companyIdProvider).value;
+        List<String> existingUsernames = [];
+        List<String> existingRoleCodes = [];
+
+        if (companyId != null) {
+          final usersSnap = await FirebaseFirestore.instance
+              .collection('companies')
+              .doc(companyId)
+              .collection('users')
+              .get();
+
+          existingUsernames = usersSnap.docs
+              .map((d) => (d.data()['username'] as String?) ?? '')
+              .where((u) => u.isNotEmpty)
+              .toList();
+
+          existingRoleCodes = usersSnap.docs
+              .map((d) => (d.data()['userCode'] as String?) ?? '')
+              .where((c) => c.isNotEmpty)
+              .toList();
+        }
+
+        final String generatedUsername = UserCodeGenerator.generateUsername(
+          fullName: _nameCtrl.text.trim(),
+          existingUsernames: existingUsernames,
+        );
+
+        final String generatedRoleCode = UserCodeGenerator.generateRoleCode(
+          roleName: _selectedRole.name,
+          existingRoleCodes: existingRoleCodes,
+        );
+
         await repo.createUser(
           email: _emailCtrl.text.trim(),
           password: _passCtrl.text.trim(),
           name: _nameCtrl.text.trim(),
           role: _selectedRole,
-        ).timeout(const Duration(seconds: 10), onTimeout: () {}); // Timeout por seguridad
+          username: generatedUsername, // <-- Nuevo campo autogenerado
+          userCode: generatedRoleCode, // <-- Nuevo código (ej: C01, S01, A01)
+        ).timeout(const Duration(seconds: 10), onTimeout: () {});
       }
 
       if (mounted) {
         context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Usuario guardado exitosamente'), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Usuario guardado exitosamente'), backgroundColor: Colors.green)
+        );
       }
     } catch (e) {
       if (mounted) {

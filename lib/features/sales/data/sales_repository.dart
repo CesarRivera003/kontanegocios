@@ -23,6 +23,7 @@ class SalesRepository {
     String? clientName, 
     String? bankName, 
     String? sellerName,
+    String? userCode,
     List<Map<String, dynamic>>? additionalCosts,
     String? customId,
     bool isElectronicInvoice = false,
@@ -107,19 +108,49 @@ class SalesRepository {
 
       final saleDate = DateTime.now();
       final currentMonthStr = "${saleDate.year}-${saleDate.month.toString().padLeft(2, '0')}";
-      
-      int currentSaleCount = 0;
-      try {
-        final counterSnap = await countersRef.get(const GetOptions(source: Source.cache));
-        if (counterSnap.exists && counterSnap.data() != null) {
-          currentSaleCount = (counterSnap.data() as Map<String, dynamic>)['salesCount'] ?? 0;
+
+      String newTicketNumber;
+
+      if (isOnline) {
+        // --- 1. MODO ONLINE: Consecutivo Oficial Acumulado ---
+        int currentSaleCount = 0;
+        try {
+          final counterSnap = await countersRef
+              .get(const GetOptions(source: Source.serverAndCache))
+              .timeout(const Duration(milliseconds: 1500));
+
+          if (counterSnap.exists && counterSnap.data() != null) {
+            final data = counterSnap.data() as Map<String, dynamic>;
+            currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
+          }
+        } catch (_) {
+          try {
+            final localSnap = await countersRef.get(const GetOptions(source: Source.cache));
+            if (localSnap.exists && localSnap.data() != null) {
+              final data = localSnap.data() as Map<String, dynamic>;
+              currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
+            }
+          } catch (_) {}
         }
-      } catch (_) {}
-      
-      int nextSaleCount = currentSaleCount + 1;
-      String newTicketNumber = isOnline 
-          ? "POS-${nextSaleCount.toString().padLeft(5, '0')}"
-          : "OFF-${nextSaleCount.toString().padLeft(5, '0')}";
+
+        final int nextSaleCount = currentSaleCount + 1;
+        newTicketNumber = "POS-${nextSaleCount.toString().padLeft(5, '0')}";
+      } else {
+        // --- 2. MODO OFFLINE: Folio Temporal Único por Cajero y Timestamp ---
+        final String y = saleDate.year.toString();
+        final String m = saleDate.month.toString().padLeft(2, '0');
+        final String d = saleDate.day.toString().padLeft(2, '0');
+        final String hh = saleDate.hour.toString().padLeft(2, '0');
+        final String mm = saleDate.minute.toString().padLeft(2, '0');
+        final String ss = saleDate.second.toString().padLeft(2, '0');
+
+        // Si viene el userCode (ej: C01, A01, S01), se usa directamente; de lo contrario fallback a 'ADM'
+        final String codeTag = (userCode != null && userCode.isNotEmpty) 
+            ? userCode 
+            : 'ADM';
+
+        newTicketNumber = "OFF-$y$m$d$hh$mm$ss$codeTag";
+      }
 
       final saleObj = Sale(
         id: salesRef.id,
@@ -143,17 +174,26 @@ class SalesRepository {
         isOffline: !isOnline,
       );
 
-      // 2. Batch de venta + inventario
+      // 2. BATCH DE VENTA + INVENTARIO
       final batch = _firestore.batch();
-      batch.set(salesRef, saleObj.toMap());
-      batch.set(countersRef, {'salesCount': nextSaleCount}, SetOptions(merge: true));
 
+      // A. Guardar Venta
+      batch.set(salesRef, saleObj.toMap());
+
+      // B. Incrementar Consecutivo SOLO SI ESTÁ ONLINE
+      // Si está offline no alteramos el contador para que no desincronice el servidor
+      if (isOnline) {
+        batch.set(countersRef, {'salesCount': FieldValue.increment(1)}, SetOptions(merge: true));
+      }
+
+      // C. Descontar Inventario
       for (final item in cartItems) {
         if (item.product.isService) continue;
         final productRef = companyRef.collection('products').doc(item.product.id);
         batch.set(productRef, {'stock': FieldValue.increment(-item.quantity)}, SetOptions(merge: true));
       }
 
+      // D. Ventas mensuales
       batch.set(profileRef, {
         'currentMonth': currentMonthStr,
         'currentMonthSales': FieldValue.increment(total),

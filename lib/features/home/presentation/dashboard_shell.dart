@@ -152,17 +152,44 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
                                 errorBuilder: (ctx, _, __) => Icon(Icons.bar_chart_rounded, size: 40, color: theme.primaryColor),
                               ),
                             ),
-                            trailing: Expanded(
-                              child: Align(
-                                alignment: Alignment.bottomCenter,
-                                child: Padding(
-                                  padding: const EdgeInsets.only(bottom: 20),
-                                  child: IconButton(
+                            trailing: Padding(
+                              padding: const EdgeInsets.only(bottom: 20, top: 10),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  // 1. Badge con el código (ej: C01 o A01)
+                                  if (userProfile.userCode != null)
+                                    Tooltip(
+                                      message: "${userProfile.name} (@${userProfile.username ?? 'usuario'})",
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.indigo.shade50,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.indigo.shade200),
+                                        ),
+                                        child: Text(
+                                          isExtended 
+                                              ? "${userProfile.userCode} • ${userProfile.name.split(' ').first}"
+                                              : userProfile.userCode!,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.indigo.shade900,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ),
+                                  const SizedBox(height: 10),
+                                  // 2. Botón de Cerrar Sesión original
+                                  IconButton(
                                     icon: const Icon(Icons.logout, color: Colors.red),
                                     onPressed: () => ref.read(authRepositoryProvider).signOut(),
                                     tooltip: 'Cerrar Sesión',
                                   ),
-                                ),
+                                ],
                               ),
                             ),
                             destinations: visibleDestinations.map((d) => NavigationRailDestination(
@@ -231,15 +258,37 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
                           maxLines: 1, 
                           overflow: TextOverflow.ellipsis,
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 5),
                         Row(
                           children: [
+                            // 1. Rol del usuario
                             Icon(Icons.shield_outlined, size: 12, color: Colors.white.withOpacity(0.7)),
                             const SizedBox(width: 4),
                             Text(
                               userProfile.role.name.toUpperCase(),
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w400, color: Colors.white.withOpacity(0.7), letterSpacing: 1.5),
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.w400, color: Colors.white.withOpacity(0.7), letterSpacing: 1.2),
                             ),
+                            const SizedBox(width: 8),
+
+                            // 2. Badge discreto con Código (C01) y @Username
+                            if (userProfile.userCode != null || userProfile.username != null)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Colors.indigo.withOpacity(0.4),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Colors.indigo.shade300.withOpacity(0.5)),
+                                ),
+                                child: Text(
+                                  "${userProfile.userCode ?? ''}${userProfile.username != null ? ' • @${userProfile.username}' : ''}",
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.white,
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
                           ],
                         ),
                       ],
