@@ -561,9 +561,8 @@ class _RankingSection extends StatelessWidget {
 class _StatRowCompact extends StatelessWidget {
   final String label;
   final String value;
-  final Color color;
 
-  const _StatRowCompact({required this.label, required this.value, this.color = Colors.black87});
+  const _StatRowCompact({super.key, required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -573,7 +572,7 @@ class _StatRowCompact extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(label, style: const TextStyle(color: Colors.black54)),
-          Text(value, style: TextStyle(fontWeight: FontWeight.w600, color: color)),
+          Text(value, style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.black87)),
         ],
       ),
     );
