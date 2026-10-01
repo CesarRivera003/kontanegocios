@@ -10,6 +10,7 @@ import '../../clients/presentation/client_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../finance/presentation/finance_providers.dart';
 import '../../finance/domain/finance_model.dart'; 
+import '../../../core/services/network_connectivity_service.dart';
 
 class SaveExpenseScreen extends ConsumerStatefulWidget {
   final Expense? expenseToEdit;
@@ -81,6 +82,10 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
     setState(() => _isLoading = true);
     
     try {
+      // 1. Detectar estado de conexión
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+
       final userProfile = ref.read(userProfileProvider).value;
       final String currentUserId = userProfile?.id ?? '';
       final String currentUserName = userProfile?.name ?? 'Admin';
@@ -92,7 +97,6 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
         existingPayments = widget.expenseToEdit!.payments;
       }
 
-      // --- LECTURA SEGURA DE CUENTAS (Evita congelamientos) ---
       final accounts = ref.read(bankAccountsProvider).value ?? [];
       
       String? savedBankName;
@@ -123,45 +127,62 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
         bankName: savedBankName, 
       );
 
-      // 1. GUARDAR EN GASTOS
-      await ref.read(expenseRepositoryProvider).saveExpense(expense)
-        .timeout(const Duration(seconds: 5), onTimeout: () => throw Exception("Tiempo de espera agotado"));
+      // 2. GUARDAR EN GASTOS (Sin timeout bloqueante si está offline)
+      final expenseRepo = ref.read(expenseRepositoryProvider);
+      if (isOnline) {
+        try {
+          await expenseRepo.saveExpense(expense).timeout(const Duration(seconds: 3));
+        } catch (_) {}
+      } else {
+        expenseRepo.saveExpense(expense).catchError((_) {});
+      }
 
-      // --- NUEVO: GUARDAR CATEGORÍA EN LA LISTA MAESTRA SI ES NUEVA ---
-      // Traemos la lista de categorías que está actualmente en memoria
+      // 3. GUARDAR CATEGORÍA SI ES NUEVA
       final currentCategories = ref.read(expenseCategoriesProvider).value ?? [];
       final typedCategory = expense.category;
-
-      // Verificamos si la categoría escrita NO existe en la lista (ignorando mayúsculas)
       final categoryExists = currentCategories.any((c) => c.toLowerCase() == typedCategory.toLowerCase());
 
       if (!categoryExists && typedCategory.isNotEmpty && typedCategory != 'General') {
-        // Hacemos una copia de la lista actual y le agregamos la nueva palabra
         final updatedList = List<String>.from(currentCategories)..add(typedCategory);
-        // Guardamos la nueva lista en Firebase usando tu función existente
-        await ref.read(expenseRepositoryProvider).saveManagedCategories(updatedList);
+        if (isOnline) {
+          try {
+            await expenseRepo.saveManagedCategories(updatedList).timeout(const Duration(seconds: 2));
+          } catch (_) {}
+        } else {
+          expenseRepo.saveManagedCategories(updatedList).catchError((_) {});
+        }
       }
-      // -----------------------------------------------------------------
 
       ref.refresh(expenseCategoriesProvider);
 
-      // 2. INTEGRACIÓN CON TESORERÍA
+      // 4. INTEGRACIÓN CON TESORERÍA
       final financeRepo = ref.read(financeRepositoryProvider);
       
-      // A. REVERSIÓN
+      // A. Reversión al editar
       if (widget.expenseToEdit != null) {
          final oldExpense = widget.expenseToEdit!;
          if (!oldExpense.isPending) {
-            await financeRepo.registerReversal(
-              amount: oldExpense.amount, 
-              isCash: oldExpense.paymentMethod == 'Efectivo',
-              bankName: oldExpense.bankName ?? (oldExpense.paymentMethod == 'Transferencia' ? 'Bancolombia' : null),
-              description: 'Corrección Gasto: ${oldExpense.description}'
-            );
+            if (isOnline) {
+              try {
+                await financeRepo.registerReversal(
+                  amount: oldExpense.amount, 
+                  isCash: oldExpense.paymentMethod == 'Efectivo',
+                  bankName: oldExpense.bankName ?? (oldExpense.paymentMethod == 'Transferencia' ? 'Bancolombia' : null),
+                  description: 'Corrección Gasto: ${oldExpense.description}'
+                ).timeout(const Duration(seconds: 2));
+              } catch (_) {}
+            } else {
+              financeRepo.registerReversal(
+                amount: oldExpense.amount, 
+                isCash: oldExpense.paymentMethod == 'Efectivo',
+                bankName: oldExpense.bankName ?? (oldExpense.paymentMethod == 'Transferencia' ? 'Bancolombia' : null),
+                description: 'Corrección Gasto: ${oldExpense.description}'
+              ).catchError((_) {});
+            }
          }
       }
 
-      // B. NUEVO MOVIMIENTO (Búsqueda de caja a prueba de fallos)
+      // B. Nuevo movimiento en Tesorería
       if (!_isPending) {
         String? targetAccountId;
 
@@ -177,7 +198,7 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
         }
         
         if (targetAccountId != null) {
-          await financeRepo.addTransaction(BankTransaction(
+          final financeTx = BankTransaction(
             id: '',
             accountId: targetAccountId,
             type: 'EXPENSE', 
@@ -185,13 +206,26 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
             description: 'Gasto: ${_descCtrl.text} (${_categoryCtrl.text})',
             date: _selectedDate,
             relatedDocId: expense.id.isNotEmpty ? expense.id : 'nuevo_gasto',
-          ));
+          );
+
+          if (isOnline) {
+            try {
+              await financeRepo.addTransaction(financeTx).timeout(const Duration(seconds: 2));
+            } catch (_) {}
+          } else {
+            financeRepo.addTransaction(financeTx).catchError((_) {});
+          }
         }
       }
 
       if (mounted) {
         context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Gasto guardado correctamente'), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isOnline ? 'Gasto guardado correctamente' : 'ℹ️ Gasto guardado localmente (se sincronizará al conectar)'), 
+            backgroundColor: isOnline ? Colors.green : Colors.orange,
+          ),
+        );
       }
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));

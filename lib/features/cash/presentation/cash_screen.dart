@@ -13,6 +13,7 @@ import 'denomination_calculator_dialog.dart';
 import '../../auth/presentation/auth_providers.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../home/presentation/dashboard_shell.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class CashScreen extends ConsumerStatefulWidget {
   const CashScreen({super.key});
@@ -394,15 +395,32 @@ class _CashScreenState extends ConsumerState<CashScreen> {
 
               const SizedBox(height: 30),
 
-              ElevatedButton.icon(
-                onPressed: () => _saveClosure(base, _manualIn, _sales, _expenses + _manualOut, theoretical, real, difference),
-                icon: const Icon(Icons.lock),
-                label: const Text("CERRAR CAJA Y GUARDAR ARQUEO"),
-                style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  backgroundColor: Colors.indigo,
-                  foregroundColor: Colors.white
-                ),
+              Builder(
+                builder: (context) {
+                  final networkStatus = ref.watch(networkConnectivityProvider);
+                  final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                  return ElevatedButton.icon(
+                    onPressed: isOnline 
+                      ? () => _saveClosure(base, _manualIn, _sales, _expenses + _manualOut, theoretical, real, difference)
+                      : () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('⚠️ No puedes cerrar la caja sin internet. Conéctate a una red para realizar el arqueo y cierre definitivo.'),
+                              backgroundColor: Colors.orange,
+                              duration: Duration(seconds: 4),
+                            ),
+                          );
+                        },
+                    icon: const Icon(Icons.lock),
+                    label: Text(isOnline ? "CERRAR CAJA Y GUARDAR ARQUEO" : "CERRAR CAJA (REQUIERE INTERNET)"),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      backgroundColor: isOnline ? Colors.indigo : Colors.grey.shade600,
+                      foregroundColor: Colors.white
+                    ),
+                  );
+                },
               ),
             ], // FIN DEL BLOQUE OCULTO
           ],
@@ -427,6 +445,16 @@ class _CashScreenState extends ConsumerState<CashScreen> {
 
   // --- GUARDADO CON BASE DE MAÑANA Y DETALLES ---
   Future<void> _saveClosure(double base, double provisions, double sales, double expenses, double theoretical, double real, double diff) async {
+    final networkStatus = ref.read(networkConnectivityProvider);
+    if (networkStatus == NetworkStatus.offline) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('⚠️ Se requiere conexión a internet para cerrar caja'), backgroundColor: Colors.orange),
+        );
+      }
+      return;
+    }
+
     final userProfile = ref.read(userProfileProvider).value;
     if (userProfile == null) return;
     
@@ -695,15 +723,31 @@ class _CashScreenState extends ConsumerState<CashScreen> {
                   userId: userProfile?.id ?? '',
                 );
                 
-                try {
-                  await ref.read(cashRepositoryProvider).addCashMovement(newTx);
+                final networkStatus = ref.read(networkConnectivityProvider);
+                final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                final cashRepo = ref.read(cashRepositoryProvider);
+                if (isOnline) {
+                  try {
+                    await cashRepo.addCashMovement(newTx).timeout(const Duration(seconds: 2));
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("Movimiento manual guardado con éxito"), backgroundColor: Colors.green)
+                      );
+                    }
+                  } catch (e) {
+                    if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
+                  }
+                } else {
+                  // En offline: guardado local en segundo plano sin congelar
+                  cashRepo.addCashMovement(newTx).catchError((err) {
+                    debugPrint("Movimiento de caja guardado en caché local: $err");
+                  });
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Movimiento manual guardado con éxito"), backgroundColor: Colors.green)
+                      const SnackBar(content: Text("ℹ️ Movimiento guardado localmente (se sincronizará al conectar)"), backgroundColor: Colors.orange)
                     );
                   }
-                } catch (e) {
-                  if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red));
                 }
               }
             },

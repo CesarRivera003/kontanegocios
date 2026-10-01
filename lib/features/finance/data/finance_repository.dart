@@ -65,35 +65,27 @@ class FinanceRepository {
   /// Agrega una transacción simple (Ingreso o Gasto) y actualiza el saldo de forma atómica
   Future<void> addTransaction(BankTransaction tx) async {
     final accountDoc = _accountsRef.doc(tx.accountId);
+    final newTxRef = _transactionsRef(tx.accountId).doc();
     
-    // Usamos runTransaction para evitar problemas de concurrencia
-    await _firestore.runTransaction((transaction) async {
-      final snapshot = await transaction.get(accountDoc);
-      if (!snapshot.exists) throw Exception("La cuenta no existe");
+    // Determinar si suma o resta
+    final bool isAddition = ['DEPOSIT', 'SALE', 'INCOME', 'TRANSFER_IN'].contains(tx.type);
+    final double delta = isAddition ? tx.amount : -tx.amount;
 
-      final currentBalance = ((snapshot.data() as Map<String, dynamic>)['balance'] ?? 0).toDouble();
-      double newBalance;
+    final batch = _firestore.batch();
+    
+    // 1. Guardar la transacción
+    batch.set(newTxRef, tx.toMap());
 
-      // Determinar si suma o resta
-      // DEPOSIT, SALE, INCOME, TRANSFER_IN -> Suman
-      // WITHDRAWAL, EXPENSE, TRANSFER_OUT -> Restan
-      if (['DEPOSIT', 'SALE', 'INCOME', 'TRANSFER_IN'].contains(tx.type)) {
-        newBalance = currentBalance + tx.amount;
-      } else {
-        newBalance = currentBalance - tx.amount;
-      }
+    // 2. Actualizar el saldo usando FieldValue.increment (Funciona ONLINE y OFFLINE)
+    batch.set(accountDoc, {
+      'balance': FieldValue.increment(delta),
+    }, SetOptions(merge: true));
 
-      // 1. Guardar la transacción
-      final newTxRef = _transactionsRef(tx.accountId).doc();
-      transaction.set(newTxRef, tx.toMap());
-
-      // 2. Actualizar el saldo de la cuenta
-      transaction.update(accountDoc, {'balance': newBalance});
-    });
+    await batch.commit();
   }
 
   // ==============================================================================
-  // TRANSFERENCIAS ENTRE CUENTAS
+  // TRANSFERENCIAS ENTRE CUENTAS (COMPATIBLE ONLINE Y OFFLINE)
   // ==============================================================================
 
   Future<void> transferFunds({
@@ -102,49 +94,45 @@ class FinanceRepository {
     required double amount,
     required String description, 
   }) async {
-    await _firestore.runTransaction((transaction) async {
-      final sourceRef = _accountsRef.doc(sourceAccountId);
-      final destRef = _accountsRef.doc(destinationAccountId);
-      
-      final sourceTxRef = sourceRef.collection('transactions').doc();
-      final destTxRef = destRef.collection('transactions').doc();
+    final sourceRef = _accountsRef.doc(sourceAccountId);
+    final destRef = _accountsRef.doc(destinationAccountId);
+    
+    // Usamos tus mismas subcolecciones existentes
+    final sourceTxRef = _transactionsRef(sourceAccountId).doc();
+    final destTxRef = _transactionsRef(destinationAccountId).doc();
 
-      final sourceSnapshot = await transaction.get(sourceRef);
-      final destSnapshot = await transaction.get(destRef);
+    final txOut = BankTransaction(
+      id: sourceTxRef.id,
+      accountId: sourceAccountId,
+      type: 'TRANSFER_OUT',
+      amount: amount,
+      description: 'Transferencia a: $description',
+      date: DateTime.now(),
+      transferRelatedAccountId: destinationAccountId,
+    );
 
-      if (!sourceSnapshot.exists || !destSnapshot.exists) {
-        throw Exception("Una de las cuentas no existe");
-      }
+    final txIn = BankTransaction(
+      id: destTxRef.id,
+      accountId: destinationAccountId,
+      type: 'TRANSFER_IN',
+      amount: amount,
+      description: 'Recibido de: $description',
+      date: DateTime.now(),
+      transferRelatedAccountId: sourceAccountId,
+    );
 
-      final double sourceBalance = ((sourceSnapshot.data() as Map<String, dynamic>)['balance'] ?? 0).toDouble();
-      final double destBalance = ((destSnapshot.data() as Map<String, dynamic>)['balance'] ?? 0).toDouble();
+    // Usamos WriteBatch en lugar de runTransaction para soporte offline y online
+    final batch = _firestore.batch();
 
-      final txOut = BankTransaction(
-        id: sourceTxRef.id,
-        accountId: sourceAccountId,
-        type: 'TRANSFER_OUT',
-        amount: amount,
-        description: 'Transferencia a: $description',
-        date: DateTime.now(),
-        transferRelatedAccountId: destinationAccountId,
-      );
+    // 1. Guardar movimientos en cada subcolección respectiva
+    batch.set(sourceTxRef, txOut.toMap());
+    batch.set(destTxRef, txIn.toMap());
 
-      final txIn = BankTransaction(
-        id: destTxRef.id,
-        accountId: destinationAccountId,
-        type: 'TRANSFER_IN',
-        amount: amount,
-        description: 'Recibido de: $description',
-        date: DateTime.now(),
-        transferRelatedAccountId: sourceAccountId,
-      );
+    // 2. Afectar saldos de forma atómica en local y en la nube
+    batch.set(sourceRef, {'balance': FieldValue.increment(-amount)}, SetOptions(merge: true));
+    batch.set(destRef, {'balance': FieldValue.increment(amount)}, SetOptions(merge: true));
 
-      transaction.set(sourceTxRef, txOut.toMap());
-      transaction.set(destTxRef, txIn.toMap());
-      
-      transaction.update(sourceRef, {'balance': sourceBalance - amount});
-      transaction.update(destRef, {'balance': destBalance + amount});
-    });
+    await batch.commit();
   }
 
   // --- ESTABLECER CUENTA PRINCIPAL (DEFAULT) ---

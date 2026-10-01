@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'cart_item_model.dart'; 
+import 'cart_item_model.dart';
+import '../../inventory/domain/product_model.dart';
 
 class PaymentMethodDetail {
   final String method;
@@ -85,6 +86,9 @@ class Sale {
   final String? dianPrefix;   // NUEVO: Ej: SETT
   final int? dianNumber;      // NUEVO: Ej: 45
   final String? clientIdNumber;
+  final bool needsSync;   // true si falta emitir a la DIAN o confirmar correlativo
+  final bool isOffline;    // true si se creó sin conexión a internet
+  final Map<String, dynamic>? clientData; // Datos del cliente para retransmisión DIAN
 
   Sale({
     required this.id,
@@ -94,10 +98,10 @@ class Sale {
     required this.initialPayments,
     this.clientName,
     this.clientIdNumber,
+    this.clientData,
     this.sellerName,
     this.payments = const [], 
     this.additionalCosts = const [],
-    
     this.isElectronicInvoice = false,
     this.cufe,
     this.dianStatus = 'No Aplica',
@@ -105,6 +109,8 @@ class Sale {
     this.ticketNumber,
     this.dianPrefix,
     this.dianNumber,
+    this.needsSync = false,
+    this.isOffline = false,
   });
 
   double get paidInInitial => initialPayments.fold(0, (sum, p) => p.method == 'Crédito' ? sum : sum + p.amount);
@@ -133,7 +139,6 @@ class Sale {
       'initialPayments': initialPayments.map((p) => p.toMap()).toList(),
       'payments': payments.map((p) => p.toMap()).toList(),
       'additionalCosts': additionalCosts,
-      
       'isElectronicInvoice': isElectronicInvoice,
       'cufe': cufe,
       'dianStatus': dianStatus,
@@ -141,6 +146,9 @@ class Sale {
       'ticketNumber': ticketNumber,
       'dianPrefix': dianPrefix,
       'dianNumber': dianNumber,
+      'needsSync': needsSync,
+      'isOffline': isOffline,
+      'clientData': clientData,
     };
   }
 
@@ -168,6 +176,9 @@ class Sale {
       ticketNumber: map['ticketNumber'],
       dianPrefix: map['dianPrefix'],
       dianNumber: map['dianNumber'] != null ? (map['dianNumber'] as num).toInt() : null,
+      needsSync: map['needsSync'] ?? false,
+      isOffline: map['isOffline'] ?? false,
+      clientData: map['clientData'] != null ? Map<String, dynamic>.from(map['clientData']) : null,
     );
   }
 
@@ -190,6 +201,29 @@ class Sale {
         'taxRate': item.product.taxRate,
         'taxType': item.product.taxType,
       };
+    }).toList();
+  }
+
+  // Reconstruye los CartItems guardados para enviarlos a Plemsi
+  static List<CartItem> mapToCartItems(List<Map<String, dynamic>> items) {
+    return items.map((m) {
+      final product = Product(
+        id: m['productId'] ?? '',
+        name: m['name'] ?? '',
+        barcode: '',
+        price: (m['price'] ?? 0).toDouble(),
+        cost: 0,
+        stock: 0,
+        category: '',
+        unit: m['unit'] ?? 'Und',
+        taxRate: (m['taxRate'] ?? 0).toDouble(),
+        taxType: m['taxType'] ?? 'EXCLUIDO',
+      );
+      return CartItem(
+        product: product,
+        quantity: (m['quantity'] ?? 1) is int ? m['quantity'] : (m['quantity'] as num).toInt(),
+        price: (m['price'] ?? 0).toDouble(),
+      );
     }).toList();
   }
 }

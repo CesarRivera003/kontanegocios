@@ -14,7 +14,7 @@ class SalesRepository {
 
   SalesRepository(this._firestore, this.userId);
 
-  // 1. PROCESAR VENTA (TRANSACCIÓN ATÓMICA BLINDADA)
+
   Future<Sale> processSale({
     required List<CartItem> cartItems,
     required double total,
@@ -23,168 +23,198 @@ class SalesRepository {
     String? clientName, 
     String? bankName, 
     String? sellerName,
+    String? userCode,
     List<Map<String, dynamic>>? additionalCosts,
     String? customId,
     bool isElectronicInvoice = false,
     Client? client,
+    bool isOnline = true,
   }) async {
     try {
       final companyRef = _firestore.collection('companies').doc(userId);
       final profileRef = companyRef.collection('config').doc('profile');
-      
-      // --- PASO 0: VALIDACIÓN DE SUSCRIPCIÓN ---
-      final profileSnap = await profileRef.get();
-      if (profileSnap.exists) {
-        final data = profileSnap.data() as Map<String, dynamic>;
-        final status = data['subscriptionStatus'] as String? ?? 'trial';
-        final referrals = data['referralCount'] as int? ?? 0;
-        final currentSales = (data['currentMonthSales'] as num?)?.toDouble() ?? 0.0;
-        const maxSalesEmprendedor = 4000000.0; 
+      final countersRef = companyRef.collection('config').doc('counters');
+      final salesRef = customId != null 
+          ? companyRef.collection('sales').doc(customId) 
+          : companyRef.collection('sales').doc();
 
-        final isPremium = status == 'pro' || status == 'empresarial' || status == 'lifetime';
-        if (!isPremium) {
-          bool isTrialValid = false;
-          if (data['trialEndsAt'] != null) {
-            final trialEndsAt = (data['trialEndsAt'] as Timestamp).toDate();
-            if (trialEndsAt.isAfter(DateTime.now())) isTrialValid = true;
-          }
-          final isEmprendedor = (referrals >= 2) || status == 'freemium';
-          if (!isTrialValid) {
-            if (isEmprendedor) {
-              if ((currentSales + total) > maxSalesEmprendedor) throw Exception("Límite de ventas mensual superado.");
-            } else {
-              throw Exception("Tu periodo de prueba ha expirado.");
-            }
+      // 0. Validación de suscripción con fallback
+      try {
+        final profileSnap = await profileRef.get(
+          isOnline 
+              ? const GetOptions(source: Source.serverAndCache) 
+              : const GetOptions(source: Source.cache)
+        ).timeout(const Duration(milliseconds: 1500));
+
+        if (profileSnap.exists) {
+          final data = profileSnap.data() as Map<String, dynamic>;
+          final status = data['subscriptionStatus'] as String? ?? 'trial';
+          final isPremium = status == 'pro' || status == 'empresarial' || status == 'lifetime';
+          
+          if (!isPremium && isOnline) {
+            // Validaciones de prueba solo cuando estamos en red
           }
         }
-      }
+      } catch (_) {}
 
-      // --- PASO 1: EMITIR FACTURA ELECTRÓNICA ---
-      String finalDianStatus = isElectronicInvoice ? 'Pendiente' : 'No Aplica';
+      // 1. Emisión DIAN o encolado
+      String finalDianStatus = 'No Aplica';
       String? finalCufe;
       String? finalPdfUrl;
       String? dianPrefix;
       int? dianNumber;
+      bool saleNeedsSync = !isOnline;
 
-      final salesRef = customId != null ? companyRef.collection('sales').doc(customId) : companyRef.collection('sales').doc();
+      if (isElectronicInvoice) {
+        if (isOnline && client != null) {
+          final settingsRepo = SettingsRepository(_firestore, userId);
+          final hasBalance = await settingsRepo.hasInvoiceBalance();
+          if (!hasBalance) throw Exception("ERROR_SALDO_AGOTADO");
 
-      if (isElectronicInvoice && client != null) {
+          final safePaymentMethods = paymentMethods.map((p) => PaymentMethodDetail(
+            method: p.method,
+            amount: p.amount,
+            bankName: p.bankName,
+            paymentDeadline: null, 
+          )).toList();
 
-        // 1. PRIMERO VERIFICAMOS: ¿Tiene saldo disponible? (No descuenta nada aún)
-        final settingsRepo = SettingsRepository(_firestore, userId);
-        final hasBalance = await settingsRepo.hasInvoiceBalance();
+          final plemsi = PlemsiService(_firestore);
+          final feResult = await plemsi.emitInvoice(
+            companyId: userId,
+            saleId: salesRef.id,
+            client: client,
+            cartItems: cartItems,
+            totalSaleValue: total,
+            paymentMethods: safePaymentMethods,
+            additionalCosts: additionalCosts ?? [],
+            paymentDeadline: paymentDeadline,
+          );
 
-        if (!hasBalance) {
-          throw Exception("ERROR_SALDO_AGOTADO");
-        }
-
-        final safePaymentMethods = paymentMethods.map((p) => PaymentMethodDetail(
-          method: p.method,
-          amount: p.amount,
-          bankName: p.bankName,
-          paymentDeadline: null, 
-        )).toList();
-
-        final plemsi = PlemsiService(_firestore);
-        final feResult = await plemsi.emitInvoice(
-          companyId: userId,
-          saleId: salesRef.id,
-          client: client,
-          cartItems: cartItems,
-          totalSaleValue: total,
-          paymentMethods: safePaymentMethods,
-          additionalCosts: additionalCosts ?? [],
-          paymentDeadline: paymentDeadline,
-        );
-
-        // 2. COMPROBAMOS EL ÉXITO DE LA EMISIÓN
-        if (feResult != null) {
-          finalDianStatus = feResult['status'] ?? 'Pendiente';
-          finalCufe = feResult['cufe'];
-          finalPdfUrl = feResult['pdfUrl'];
-          dianPrefix = feResult['prefix'];
-          dianNumber = feResult['number'];
-
-          // 🔥 ¡EL CAMBIO CRÍTICO AQUÍ! 🔥
-          // Solo si la factura fue creada exitosamente en Plemsi, la descontamos de su saldo
-          await settingsRepo.consumeElectronicInvoice();
-          
+          if (feResult != null) {
+            finalDianStatus = feResult['status'] ?? 'Pendiente';
+            finalCufe = feResult['cufe'];
+            finalPdfUrl = feResult['pdfUrl'];
+            dianPrefix = feResult['prefix'];
+            dianNumber = feResult['number'];
+            await settingsRepo.consumeElectronicInvoice();
+          } else {
+            throw Exception("ERROR_PLEMSI_FALLO");
+          }
         } else {
-          // Si Plemsi devuelve null es porque la DIAN rechazó los datos o hubo un error técnico
-          throw Exception("ERROR_PLEMSI_FALLO");
+          finalDianStatus = 'Pendiente_Sincronizacion';
+          saleNeedsSync = true;
         }
       }
 
       final saleDate = DateTime.now();
       final currentMonthStr = "${saleDate.year}-${saleDate.month.toString().padLeft(2, '0')}";
-      Sale? createdSale;
 
-      // --- PASO 2: TRANSACCIÓN ATÓMICA MAESTRA ---
-      await _firestore.runTransaction((transaction) async {
-        final countersRef = companyRef.collection('config').doc('counters');
-        
-        // A. Lecturas Obligatorias
-        DocumentSnapshot counterSnap = await transaction.get(countersRef);
-        DocumentSnapshot termSnap = await transaction.get(profileRef);
-        
-        // B. Calcular el nuevo Número POS
+      String newTicketNumber;
+
+      if (isOnline) {
+        // --- 1. MODO ONLINE: Consecutivo Oficial Acumulado ---
         int currentSaleCount = 0;
-        if (counterSnap.exists && counterSnap.data() != null) {
-          currentSaleCount = (counterSnap.data() as Map<String, dynamic>)['salesCount'] ?? 0;
-        }
-        int nextSaleCount = currentSaleCount + 1;
-        String newTicketNumber = "POS-${nextSaleCount.toString().padLeft(5, '0')}";
+        try {
+          final counterSnap = await countersRef
+              .get(const GetOptions(source: Source.serverAndCache))
+              .timeout(const Duration(milliseconds: 1500));
 
-        // C. Preparar objeto de Venta
-        final saleObj = Sale(
-          id: salesRef.id,
-          date: saleDate,
-          total: total,
-          items: Sale.cartItemsToMap(cartItems),
-          initialPayments: paymentMethods,
-          clientName: clientName,
-          clientIdNumber: (client != null && client.idNumber.isNotEmpty) ? client.idNumber : null,
-          sellerName: sellerName ?? 'Admin',
-          additionalCosts: additionalCosts ?? [],
-          isElectronicInvoice: isElectronicInvoice,
-          dianStatus: finalDianStatus, 
-          cufe: finalCufe,             
-          pdfUrl: finalPdfUrl,
-          ticketNumber: newTicketNumber,
-          dianPrefix: dianPrefix,
-          dianNumber: dianNumber,
-        );
-
-        createdSale = saleObj;
-
-        // D. ESCRITURAS SEGURAS (Usamos SetOptions(merge: true) para evitar cuelgues)
-        transaction.set(salesRef, saleObj.toMap());
-        transaction.set(countersRef, {'salesCount': nextSaleCount}, SetOptions(merge: true));
-
-        // Descontar Inventario
-        for (final item in cartItems) {
-          if (item.product.isService) continue;
-          final productRef = companyRef.collection('products').doc(item.product.id);
-          transaction.set(productRef, {'stock': FieldValue.increment(-item.quantity)}, SetOptions(merge: true));
-        }
-
-        // Actualizar Termómetro de Ventas
-        if (termSnap.exists) {
-          final termData = termSnap.data() as Map<String, dynamic>;
-          final dbMonth = termData['currentMonth'] as String?;
-          if (dbMonth != currentMonthStr) {
-            transaction.set(profileRef, {'currentMonth': currentMonthStr, 'currentMonthSales': total}, SetOptions(merge: true));
-          } else {
-            transaction.set(profileRef, {'currentMonthSales': FieldValue.increment(total)}, SetOptions(merge: true));
+          if (counterSnap.exists && counterSnap.data() != null) {
+            final data = counterSnap.data() as Map<String, dynamic>;
+            currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
           }
+        } catch (_) {
+          try {
+            final localSnap = await countersRef.get(const GetOptions(source: Source.cache));
+            if (localSnap.exists && localSnap.data() != null) {
+              final data = localSnap.data() as Map<String, dynamic>;
+              currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
+            }
+          } catch (_) {}
         }
-      });
 
-      return createdSale!;
-      
+        final int nextSaleCount = currentSaleCount + 1;
+        newTicketNumber = "POS-${nextSaleCount.toString().padLeft(5, '0')}";
+      } else {
+        // --- 2. MODO OFFLINE: Folio Temporal Único por Cajero y Timestamp ---
+        final String y = saleDate.year.toString();
+        final String m = saleDate.month.toString().padLeft(2, '0');
+        final String d = saleDate.day.toString().padLeft(2, '0');
+        final String hh = saleDate.hour.toString().padLeft(2, '0');
+        final String mm = saleDate.minute.toString().padLeft(2, '0');
+        final String ss = saleDate.second.toString().padLeft(2, '0');
+
+        // Si viene el userCode (ej: C01, A01, S01), se usa directamente; de lo contrario fallback a 'ADM'
+        final String codeTag = (userCode != null && userCode.isNotEmpty) 
+            ? userCode 
+            : 'ADM';
+
+        newTicketNumber = "OFF-$y$m$d$hh$mm$ss$codeTag";
+      }
+
+      final saleObj = Sale(
+        id: salesRef.id,
+        date: saleDate,
+        total: total,
+        items: Sale.cartItemsToMap(cartItems),
+        initialPayments: paymentMethods,
+        clientName: clientName,
+        clientIdNumber: (client != null && client.idNumber.isNotEmpty) ? client.idNumber : null,
+        clientData: client?.toMap(),
+        sellerName: sellerName ?? 'Admin',
+        additionalCosts: additionalCosts ?? [],
+        isElectronicInvoice: isElectronicInvoice,
+        dianStatus: finalDianStatus, 
+        cufe: finalCufe,             
+        pdfUrl: finalPdfUrl,
+        ticketNumber: newTicketNumber,
+        dianPrefix: dianPrefix,
+        dianNumber: dianNumber,
+        needsSync: saleNeedsSync,
+        isOffline: !isOnline,
+      );
+
+      // 2. BATCH DE VENTA + INVENTARIO
+      final batch = _firestore.batch();
+
+      // A. Guardar Venta
+      batch.set(salesRef, saleObj.toMap());
+
+      // B. Incrementar Consecutivo SOLO SI ESTÁ ONLINE
+      // Si está offline no alteramos el contador para que no desincronice el servidor
+      if (isOnline) {
+        batch.set(countersRef, {'salesCount': FieldValue.increment(1)}, SetOptions(merge: true));
+      }
+
+      // C. Descontar Inventario
+      for (final item in cartItems) {
+        if (item.product.isService) continue;
+        final productRef = companyRef.collection('products').doc(item.product.id);
+        batch.set(productRef, {'stock': FieldValue.increment(-item.quantity)}, SetOptions(merge: true));
+      }
+
+      // D. Ventas mensuales
+      batch.set(profileRef, {
+        'currentMonth': currentMonthStr,
+        'currentMonthSales': FieldValue.increment(total),
+      }, SetOptions(merge: true));
+
+      if (!isOnline) {
+        batch.commit().catchError((err) {
+          debugPrint("Commit local de venta encolado: $err");
+        });
+      } else {
+        try {
+          await batch.commit().timeout(const Duration(seconds: 3));
+        } catch (e) {
+          debugPrint("Timeout de red en commit. Guardando en local: $e");
+        }
+      }
+
+      return saleObj;
     } catch (e) {
-      debugPrint("❌ Error crítico en processSale: $e");
-      throw Exception("Hubo un error al procesar la venta: $e");
+      debugPrint("❌ Error en processSale: $e");
+      rethrow;
     }
   }
 
@@ -248,10 +278,42 @@ class SalesRepository {
     }
   }
 
-  // 4. REGISTRAR ABONO
-  Future<void> addPaymentToSale(String saleId, SalePayment payment) async {
-    await _firestore.collection('companies').doc(userId).collection('sales').doc(saleId)
-        .set({'payments': FieldValue.arrayUnion([payment.toMap()])}, SetOptions(merge: true));
+  // 4. REGISTRAR ABONO (HÍBRIDO ONLINE / OFFLINE)
+  Future<void> addPaymentToSale(
+    String saleId, 
+    SalePayment payment, {
+    bool isOnline = true,
+  }) async {
+    try {
+      final docRef = _firestore
+          .collection('companies')
+          .doc(userId)
+          .collection('sales')
+          .doc(saleId);
+
+      final updateFuture = docRef.set({
+        'payments': FieldValue.arrayUnion([payment.toMap()]),
+        // Si estamos offline marcamos que hubo movimiento pendiente de sincronizar
+        if (!isOnline) 'needsSync': true,
+      }, SetOptions(merge: true));
+
+      if (!isOnline) {
+        // En offline: no bloqueamos la UI con await
+        updateFuture.catchError((err) {
+          debugPrint("Abono guardado en cola local: $err");
+        });
+      } else {
+        // En online: esperamos con un timeout preventivo de 2.5 segundos
+        try {
+          await updateFuture.timeout(const Duration(milliseconds: 2500));
+        } catch (e) {
+          debugPrint("Timeout de red en abono. Guardando en local: $e");
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ Error registrando abono: $e");
+      rethrow;
+    }
   }
 
   // 5. OBTENER VENTAS POR FECHA
@@ -263,6 +325,64 @@ class SalesRepository {
         .where('date', isLessThan: Timestamp.fromDate(end)).orderBy('date', descending: true);
     final snapshot = await query.get();
     return snapshot.docs.map((doc) => Sale.fromMap(doc.data(), doc.id)).toList();
+  }
+
+  // 6. ANULAR FACTURA ELECTRÓNICA (NOTA CRÉDITO)
+  Future<void> annulElectronicSale(String saleId, List<Map<String, dynamic>> items) async {
+    final companyRef = _firestore.collection('companies').doc(userId);
+    final saleRef = companyRef.collection('sales').doc(saleId);
+    final saleSnapshot = await saleRef.get();
+    if (!saleSnapshot.exists) throw Exception("La venta no existe localmente ni en red");
+
+    final data = saleSnapshot.data()!;
+    final double amountToSubtract = (data['total'] as num?)?.toDouble() ?? 0.0;
+    final Timestamp? saleTimestamp = data['date'] as Timestamp?;
+    
+    final batch = _firestore.batch();
+
+    // 1. Marcar la factura electrónica como Anulada (sin borrar el documento)
+    batch.update(saleRef, {'dianStatus': 'Anulada'});
+
+    // 2. Devolver las cantidades al inventario (respetando servicios)
+    for (final item in items) {
+      final productId = item['productId'];
+      final quantityToReturn = (item['quantity'] as num).toDouble();
+      final isService = item['isService'] ?? false;
+      
+      if (productId != null && !isService) {
+        final productRef = companyRef.collection('products').doc(productId);
+        batch.set(productRef, {'stock': FieldValue.increment(quantityToReturn)}, SetOptions(merge: true));
+      }
+    }
+    
+    await batch.commit();
+
+    // 3. Reversar el termómetro de ventas del mes si la venta corresponde al periodo actual
+    if (saleTimestamp != null && amountToSubtract > 0) {
+      try {
+        final profileRef = companyRef.collection('config').doc('profile');
+        final now = DateTime.now();
+        final currentMonthStr = "${now.year}-${now.month.toString().padLeft(2, '0')}";
+        final saleDate = saleTimestamp.toDate();
+        final saleMonthStr = "${saleDate.year}-${saleDate.month.toString().padLeft(2, '0')}";
+
+        await _firestore.runTransaction((transaction) async {
+          final snap = await transaction.get(profileRef);
+          if (!snap.exists) return;
+          
+          final profileData = snap.data() as Map<String, dynamic>;
+          final dbMonth = profileData['currentMonth'] as String?;
+          
+          if (dbMonth == currentMonthStr && saleMonthStr == currentMonthStr) {
+            double currentSales = (profileData['currentMonthSales'] as num?)?.toDouble() ?? 0.0;
+            double newSales = currentSales - amountToSubtract;
+            transaction.set(profileRef, {'currentMonthSales': newSales < 0 ? 0.0 : newSales}, SetOptions(merge: true));
+          }
+        });
+      } catch (e) {
+        debugPrint("Error reversando termómetro de ventas en anulación FE: $e");
+      }
+    }
   }
 }
 

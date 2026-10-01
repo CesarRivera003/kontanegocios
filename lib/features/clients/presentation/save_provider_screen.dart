@@ -3,7 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../shared/widgets/custom_text_field.dart';
 import '../domain/provider_model.dart';
-import 'client_providers.dart'; // O contact_providers.dart
+import 'client_providers.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class SaveProviderScreen extends ConsumerStatefulWidget {
   final ProviderModel? providerToEdit;
@@ -79,12 +80,27 @@ class _SaveProviderScreenState extends ConsumerState<SaveProviderScreen> {
         category: category,
       );
 
-      await ref.read(providerRepositoryProvider).saveProvider(provider)
-        .timeout(const Duration(seconds: 2), onTimeout: () {});
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+      final providerRepo = ref.read(providerRepositoryProvider);
+
+      if (isOnline) {
+        try {
+          await providerRepo.saveProvider(provider).timeout(const Duration(seconds: 2));
+        } catch (_) {}
+      } else {
+        // En offline: guardado local inmediato
+        providerRepo.saveProvider(provider).catchError((_) {});
+      }
       
       if(mounted) {
         context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Proveedor Guardado'), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isOnline ? 'Proveedor Guardado' : 'ℹ️ Proveedor guardado localmente'), 
+            backgroundColor: isOnline ? Colors.green : Colors.orange,
+          ),
+        );
       }
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));

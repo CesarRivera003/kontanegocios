@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../domain/client_model.dart';
 import 'client_providers.dart';
 import '../../../core/utils/colombia_cities.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 // Importa el repositorio donde tienes companyProfileProvider
 import '../../settings/data/settings_repository.dart'; 
@@ -91,20 +92,33 @@ class _SaveClientScreenState extends ConsumerState<SaveClientScreen> {
         address: _addressCtrl.text.trim(),
         city: _cityCtrl.text.trim(),
         secondaryContact: _secondaryCtrl.text.trim(),
-        
-        // Datos FE
         isFeEnabled: _isFeEnabled,
         personType: _personType,
         taxRegime: _taxRegime,
         daneCode: _daneCodeCtrl.text.trim(),
       );
 
-      await ref.read(clientRepositoryProvider).saveClient(client)
-        .timeout(const Duration(seconds: 2), onTimeout: () {});
+      final networkStatus = ref.read(networkConnectivityProvider);
+      final bool isOnline = networkStatus != NetworkStatus.offline;
+      final clientRepo = ref.read(clientRepositoryProvider);
+
+      if (isOnline) {
+        try {
+          await clientRepo.saveClient(client).timeout(const Duration(seconds: 2));
+        } catch (_) {}
+      } else {
+        // En offline: guardado local inmediato sin esperar al servidor
+        clientRepo.saveClient(client).catchError((_) {});
+      }
 
       if (mounted) {
         context.pop();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cliente guardado'), backgroundColor: Colors.green));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isOnline ? 'Cliente guardado' : 'ℹ️ Cliente guardado localmente'), 
+            backgroundColor: isOnline ? Colors.green : Colors.orange,
+          ),
+        );
       }
     } catch (e) {
       if(mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red));

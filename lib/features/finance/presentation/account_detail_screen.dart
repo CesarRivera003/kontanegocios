@@ -5,6 +5,7 @@ import '../../../core/utils/currency_formatter.dart';
 import '../domain/finance_model.dart';
 import 'finance_providers.dart';
 import '../../../core/utils/currency_input_formatter.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class AccountDetailScreen extends ConsumerStatefulWidget {
   final BankAccount account;
@@ -159,17 +160,28 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                     // NO ES PRINCIPAL -> MOSTRAR BOTÓN PARA MARCARLA
                     OutlinedButton.icon(
                       onPressed: () async {
-                        // Llamamos al repositorio para actualizar
-                        await ref.read(financeRepositoryProvider).setAsDefaultAccount(currentAccount.id, true);
+                        final networkStatus = ref.read(networkConnectivityProvider);
+                        final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                        final financeRepo = ref.read(financeRepositoryProvider);
+                        if (isOnline) {
+                          try {
+                            await financeRepo.setAsDefaultAccount(currentAccount.id, true).timeout(const Duration(seconds: 2));
+                          } catch (_) {}
+                        } else {
+                          financeRepo.setAsDefaultAccount(currentAccount.id, true).catchError((_) {});
+                        }
                         
                         if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text("¡Cuenta marcada como principal! Las ventas en efectivo llegarán aquí."),
-                              backgroundColor: Colors.green,
+                            SnackBar(
+                              content: Text(isOnline 
+                                ? "¡Cuenta marcada como principal!" 
+                                : "ℹ️ Marcada como principal localmente"),
+                              backgroundColor: isOnline ? Colors.green : Colors.orange,
                             )
                           );
-                          Navigator.pop(context); // Salimos para refrescar la lista anterior
+                          Navigator.pop(context);
                         }
                       },
                       icon: const Icon(Icons.star_border, size: 18),
@@ -348,16 +360,14 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
               foregroundColor: Colors.white
             ),
             onPressed: () async {
-              // Limpiar formato de miles
               final amount = double.tryParse(amountCtrl.text.replaceAll(',', '')) ?? 0.0;
               final desc = descCtrl.text.trim();
 
-              // --- ALERTA DE VALIDACIÓN ---
               if (amount <= 0 || desc.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(content: Text("Ingresa un monto válido y un motivo."), backgroundColor: Colors.orange)
                 );
-                return; // Detenemos
+                return;
               }
 
               final tx = BankTransaction(
@@ -369,14 +379,29 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                 date: DateTime.now(),
               );
 
+              final networkStatus = ref.read(networkConnectivityProvider);
+              final bool isOnline = networkStatus != NetworkStatus.offline;
+
               try {
-                await ref.read(financeRepositoryProvider).addTransaction(tx);
+                final financeRepo = ref.read(financeRepositoryProvider);
+                if (isOnline) {
+                  try {
+                    await financeRepo.addTransaction(tx).timeout(const Duration(seconds: 2));
+                  } catch (_) {}
+                } else {
+                  financeRepo.addTransaction(tx).catchError((_) {});
+                }
+
                 if (context.mounted) {
                   Navigator.pop(ctx);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text("Movimiento registrado: $desc"), 
-                      backgroundColor: isDeposit ? Colors.green : Colors.red
+                      content: Text(isOnline 
+                        ? "Movimiento registrado: $desc" 
+                        : "ℹ️ Movimiento guardado localmente: $desc"), 
+                      backgroundColor: isOnline 
+                        ? (isDeposit ? Colors.green : Colors.red) 
+                        : Colors.orange
                     )
                   );
                 }
@@ -408,7 +433,6 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           ElevatedButton(
             onPressed: () async {
               if (nameCtrl.text.isNotEmpty) {
-                // Creamos copia actualizada
                 final updated = BankAccount(
                   id: widget.account.id,
                   name: nameCtrl.text.trim(),
@@ -417,10 +441,22 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                   isDefault: widget.account.isDefault,
                   isActive: widget.account.isActive,
                 );
-                await ref.read(financeRepositoryProvider).updateAccount(updated);
+
+                final networkStatus = ref.read(networkConnectivityProvider);
+                final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                final financeRepo = ref.read(financeRepositoryProvider);
+                if (isOnline) {
+                  try {
+                    await financeRepo.updateAccount(updated).timeout(const Duration(seconds: 2));
+                  } catch (_) {}
+                } else {
+                  financeRepo.updateAccount(updated).catchError((_) {});
+                }
+
                 if (mounted) {
                   Navigator.pop(ctx);
-                  Navigator.pop(context); // Salir para refrescar titulo
+                  Navigator.pop(context);
                 }
               }
             },
@@ -433,12 +469,26 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
 
   // --- LÓGICA DE ELIMINACIÓN SEGURA ---
   Future<void> _attemptDeleteAccount(WidgetRef ref) async {
-    // 1. SI ESTÁ INACTIVA, LA RESTAURAMOS (Lógica inversa simple)
+    // 🔒 REGLA DE SEGURIDAD OFFLINE: No permitir eliminar cuentas sin red
+    final networkStatus = ref.read(networkConnectivityProvider);
+    final bool isOnline = networkStatus != NetworkStatus.offline;
+
+    if (!isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("⚠️ Debes tener conexión a internet para eliminar o archivar cuentas."),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    // 1. SI ESTÁ INACTIVA, LA RESTAURAMOS
     if (!widget.account.isActive) {
       final updated = BankAccount(
         id: widget.account.id, name: widget.account.name, balance: widget.account.balance,
         isCash: widget.account.isCash, isDefault: widget.account.isDefault,
-        isActive: true, // REACTIVAR
+        isActive: true,
       );
       await ref.read(financeRepositoryProvider).updateAccount(updated);
       if (mounted) {
@@ -447,6 +497,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
       }
       return;
     }
+
 
     // 2. VALIDACIÓN: SALDO EN 0
     if (widget.account.balance != 0) {

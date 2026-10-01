@@ -12,6 +12,7 @@ import 'pdf_generator.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 
 import '../../finance/presentation/finance_providers.dart'; 
+import '../../../core/services/network_connectivity_service.dart';
 
 class SalesHistoryTab extends ConsumerStatefulWidget {
   const SalesHistoryTab({super.key});
@@ -458,10 +459,28 @@ class _SalesHistoryTabState extends ConsumerState<SalesHistoryTab> {
                                         },
                                       )
                                     else
-                                      TextButton.icon(
-                                        icon: const Icon(Icons.delete, color: Colors.red),
-                                        label: const Text("Anular", style: TextStyle(color: Colors.red)),
-                                        onPressed: () => _confirmDeleteSale(context, ref, sale.id),
+                                      Builder(
+                                        builder: (context) {
+                                          // Verificamos conectividad en tiempo real
+                                          final networkStatus = ref.watch(networkConnectivityProvider);
+                                          final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                                          return TextButton.icon(
+                                            icon: Icon(Icons.delete, color: isOnline ? Colors.red : Colors.grey),
+                                            label: Text("Anular", style: TextStyle(color: isOnline ? Colors.red : Colors.grey)),
+                                            onPressed: isOnline 
+                                                ? () => _confirmDeleteSale(context, ref, sale.id)
+                                                : () {
+                                                    ScaffoldMessenger.of(context).showSnackBar(
+                                                      const SnackBar(
+                                                        content: Text('⚠️ No es posible anular ventas sin conexión a internet.'),
+                                                        backgroundColor: Colors.orange,
+                                                        duration: Duration(seconds: 3),
+                                                      ),
+                                                    );
+                                                  },
+                                          );
+                                        },
                                       )
                                 ],
                               )

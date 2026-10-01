@@ -6,6 +6,8 @@ class UserModel {
   final String name;
   final UserRole role;
   final bool isActive;
+  final String? username;  // <-- NUEVO (Ej: CAPEREZ)
+  final String? userCode;  // <-- NUEVO (Ej: C01, A01, S01)
   final String ownerId;
 
   UserModel({
@@ -14,6 +16,8 @@ class UserModel {
     required this.name,
     required this.role,
     this.isActive = true,
+    this.username,
+    this.userCode,
     required this.ownerId,
   });
 
@@ -55,6 +59,8 @@ class UserModel {
       'name': name,
       'role': role.name,
       'isActive': isActive,
+      'username': username,
+      'userCode': userCode,
       'ownerId': ownerId,
     };
   }
@@ -69,6 +75,8 @@ class UserModel {
         orElse: () => UserRole.cashier
       ),
       isActive: map['isActive'] ?? true,
+      username: map['username'],
+      userCode: map['userCode'],
       ownerId: map['ownerId'] ?? '',
     );
   }

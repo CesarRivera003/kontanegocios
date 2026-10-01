@@ -28,6 +28,8 @@ class UserManagementRepository {
     required String password,
     required String name,
     required UserRole role,
+    String? username,
+    String? userCode,
   }) async {
     try {
       final functions = FirebaseFunctions.instance;

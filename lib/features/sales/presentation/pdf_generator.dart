@@ -171,27 +171,57 @@ class PdfGenerator {
               if (sale.totalPaidReal > sale.total)
                  _buildRow('Cambio:', _currencyFormat.format(sale.totalPaidReal - sale.total), _boldStyle),
 
-              // --- SECCIÓN LEGAL DIAN ---
-              if (sale.isElectronicInvoice && sale.dianPrefix != null) ...[
-                pw.SizedBox(height: 10),
+              // --- SECCIÓN LEGAL DIAN (ONLINE VS CONTINGENCIA OFFLINE) ---
+              if (sale.isElectronicInvoice) ...[
+                pw.SizedBox(height: 8),
                 pw.Divider(borderStyle: pw.BorderStyle.dashed, thickness: 1),
-                pw.SizedBox(height: 5),
-                pw.Container(
-                  width: double.infinity,
-                  padding: const pw.EdgeInsets.all(5),
-                  decoration: pw.BoxDecoration(color: PdfColors.grey200, borderRadius: pw.BorderRadius.circular(4)),
-                  child: pw.Column(
-                    children: [
-                      pw.Text('FACTURA ELECTRÓNICA DE VENTA', style: _boldStyle, textAlign: pw.TextAlign.center),
-                      pw.SizedBox(height: 3),
-                      pw.Text('${sale.dianPrefix}-${sale.dianNumber}', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo900), textAlign: pw.TextAlign.center),
-                      pw.SizedBox(height: 3),
-                      pw.Text('Este documento fue transmitido a la DIAN. Puede descargar el PDF oficial con firma digital desde su correo electrónico.', style: pw.TextStyle(fontSize: 7, color: PdfColors.grey700), textAlign: pw.TextAlign.center),
-                    ]
-                  )
+                pw.SizedBox(height: 4),
+
+                if (sale.dianPrefix != null && sale.dianNumber != null) ...[
+                  // CASO 1: EMITIDA EXITOSAMENTE ONLINE
+                  pw.Container(
+                    width: double.infinity,
+                    padding: const pw.EdgeInsets.all(5),
+                    decoration: pw.BoxDecoration(color: PdfColors.grey200, borderRadius: pw.BorderRadius.circular(4)),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('FACTURA ELECTRÓNICA DE VENTA', style: _boldStyle, textAlign: pw.TextAlign.center),
+                        pw.SizedBox(height: 3),
+                        pw.Text('${sale.dianPrefix}-${sale.dianNumber}', style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.indigo900), textAlign: pw.TextAlign.center),
+                        pw.SizedBox(height: 3),
+                        pw.Text('Este documento fue transmitido a la DIAN. Puede descargar el PDF oficial con firma digital desde su correo electrónico.', style: pw.TextStyle(fontSize: 7, color: PdfColors.grey700), textAlign: pw.TextAlign.center),
+                      ],
+                    ),
+                  ),
+                ] else ...[
+                  // CASO 2: CONTINGENCIA OFFLINE
+                  pw.Container(
+                    width: double.infinity,
+                    padding: const pw.EdgeInsets.all(5),
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border.all(color: PdfColors.grey700, width: 0.8),
+                      borderRadius: pw.BorderRadius.circular(4),
+                    ),
+                    child: pw.Column(
+                      children: [
+                        pw.Text('COMPROBANTE PROVISIONAL DE VENTA', style: _boldStyle, textAlign: pw.TextAlign.center),
+                        pw.SizedBox(height: 2),
+                        pw.Text('(Operación en Contingencia sin Conexión)', style: pw.TextStyle(fontSize: 7.5, fontWeight: pw.FontWeight.bold, color: PdfColors.orange900), textAlign: pw.TextAlign.center),
+                        pw.SizedBox(height: 3),
+                        pw.Text('La Factura Electrónica oficial será transmitida y validada ante la DIAN de forma automática al restablecer el servicio de red.', style: pw.TextStyle(fontSize: 6.5, color: PdfColors.grey800), textAlign: pw.TextAlign.center),
+                      ],
+                    ),
+                  ),
+                ],
+              ] else if (sale.isOffline) ...[
+                // Venta POS normal hecha offline
+                pw.SizedBox(height: 6),
+                pw.Align(
+                  alignment: pw.Alignment.center,
+                  child: pw.Text('* Comprobante registrado en modo local *', style: pw.TextStyle(fontSize: 7, fontStyle: pw.FontStyle.italic, color: PdfColors.grey700)),
                 ),
               ],
-
+              
               // --- PIE DE PÁGINA ---
               pw.SizedBox(height: 15),
               if (profile?.slogan.isNotEmpty == true)

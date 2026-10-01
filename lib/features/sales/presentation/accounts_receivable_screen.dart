@@ -20,6 +20,7 @@ import '../../auth/presentation/user_profile_provider.dart';
 
 import '../../cash/data/cash_repository.dart';
 import '../../cash/domain/cash_transaction_model.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class AccountsReceivableScreen extends ConsumerStatefulWidget {
   const AccountsReceivableScreen({super.key});
@@ -405,7 +406,10 @@ class _AccountsReceivableScreenState extends ConsumerState<AccountsReceivableScr
                     return;
                   }
 
-                  // SALVAVIDAS: Atrapamos errores para cerrar el modal
+                  // 1. Detectar si hay red real
+                  final networkStatus = ref.read(networkConnectivityProvider);
+                  final bool isOnline = networkStatus != NetworkStatus.offline;
+
                   try {
                     final userProfile = ref.read(userProfileProvider).value;
                     final userName = userProfile?.name ?? 'Usuario';
@@ -418,9 +422,17 @@ class _AccountsReceivableScreenState extends ConsumerState<AccountsReceivableScr
                       recordedBy: userName,   
                     );
 
-                    await ref.read(salesRepositoryProvider).addPaymentToSale(sale.id, payment);
+                    // 2. Abono en la venta (sin bloquear en offline)
+                    final salesRepo = ref.read(salesRepositoryProvider);
+                    if (isOnline) {
+                      try {
+                        await salesRepo.addPaymentToSale(sale.id, payment).timeout(const Duration(seconds: 2));
+                      } catch (_) {}
+                    } else {
+                      salesRepo.addPaymentToSale(sale.id, payment).catchError((_) {});
+                    }
 
-                    // TESORERÍA BLINDADA
+                    // 3. Tesorería (idéntico a tu lógica original)
                     final accounts = accountsAsync.value ?? [];
                     String? targetAccountId;
 
@@ -435,7 +447,7 @@ class _AccountsReceivableScreenState extends ConsumerState<AccountsReceivableScr
                     }
 
                     if (targetAccountId != null) {
-                      await ref.read(financeRepositoryProvider).addTransaction(BankTransaction(
+                      final financeTx = BankTransaction(
                         id: '',
                         accountId: targetAccountId,
                         type: 'INCOME', 
@@ -443,10 +455,19 @@ class _AccountsReceivableScreenState extends ConsumerState<AccountsReceivableScr
                         description: 'Abono Factura #${sale.id.substring(0,5).toUpperCase()} (${sale.clientName})',
                         date: DateTime.now(),
                         relatedDocId: sale.id,
-                      ));
+                      );
+
+                      final financeRepo = ref.read(financeRepositoryProvider);
+                      if (isOnline) {
+                        try {
+                          await financeRepo.addTransaction(financeTx).timeout(const Duration(seconds: 2));
+                        } catch (_) {}
+                      } else {
+                        financeRepo.addTransaction(financeTx).catchError((_) {});
+                      }
                     }
 
-                    // CAJA
+                    // 4. Caja (idéntico a tu lógica original)
                     if (selectedMethod == 'Efectivo') {
                       final cashTx = CashTransaction(
                         id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -456,12 +477,29 @@ class _AccountsReceivableScreenState extends ConsumerState<AccountsReceivableScr
                         date: DateTime.now(),
                         userId: userProfile?.id ?? '', 
                       );
-                      await ref.read(cashRepositoryProvider).addCashMovement(cashTx);
+
+                      final cashRepo = ref.read(cashRepositoryProvider);
+                      if (isOnline) {
+                        try {
+                          await cashRepo.addCashMovement(cashTx).timeout(const Duration(seconds: 2));
+                        } catch (_) {}
+                      } else {
+                        cashRepo.addCashMovement(cashTx).catchError((_) {});
+                      }
                     }
 
+                    // 5. Cierre inmediato y confirmación
                     if (context.mounted) {
                       Navigator.pop(ctx);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Abono registrado correctamente'), backgroundColor: Colors.green));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(isOnline 
+                            ? '✅ Abono registrado correctamente' 
+                            : 'ℹ️ Abono guardado localmente (se sincronizará al conectar)'
+                          ), 
+                          backgroundColor: isOnline ? Colors.green : Colors.orange,
+                        ),
+                      );
                     }
                   } catch (e) {
                      if (context.mounted) {
