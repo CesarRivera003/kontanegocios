@@ -24,6 +24,7 @@ import '../presentation/audit_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../../auth/presentation/auth_providers.dart';
 import 'package:material_symbols_icons/symbols.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 class InventoryScreen extends ConsumerStatefulWidget {
   const InventoryScreen({super.key});
@@ -334,15 +335,34 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                   
                   // 8. SOLO MOSTRAR ELIMINAR SI TIENE PERMISO ESPECÍFICO (Admin/Supervisor)
                   if (canDelete)
-                  OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _confirmDelete(context, product);
-                    },
-                    style: OutlinedButton.styleFrom(foregroundColor: Colors.red, side: const BorderSide(color: Colors.red)),
-                    icon: const Icon(Icons.delete),
-                    label: const Text('Eliminar'),
-                  ),
+                    Builder(
+                      builder: (context) {
+                        final networkStatus = ref.watch(networkConnectivityProvider);
+                        final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                        return OutlinedButton.icon(
+                          onPressed: isOnline
+                              ? () {
+                                  Navigator.pop(ctx);
+                                  _confirmDelete(context, product);
+                                }
+                              : () {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('⚠️ No se pueden eliminar productos de inventario sin conexión a internet.'),
+                                      backgroundColor: Colors.orange,
+                                    ),
+                                  );
+                                },
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: isOnline ? Colors.red : Colors.grey,
+                            side: BorderSide(color: isOnline ? Colors.red : Colors.grey),
+                          ),
+                          icon: const Icon(Icons.delete),
+                          label: const Text('Eliminar'),
+                        );
+                      },
+                    ),
                 ],
               )
             ],
@@ -375,18 +395,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
 
   Future<void> _deleteProduct(BuildContext context, Product product) async {
     try {
-      final repo = ref.read(inventoryRepositoryProvider);
-      await repo.deleteProduct(product.id);
+      final repo = ref.read(inventoryRepositoryProvider); //[cite: 15]
+      await repo.deleteProduct(product.id).timeout(const Duration(seconds: 2)); //[cite: 15]
       
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-             const SnackBar(content: Text('Producto eliminado correctamente'))
+      if (mounted) { //[cite: 15]
+        ScaffoldMessenger.of(context).showSnackBar( //[cite: 15]
+          const SnackBar(content: Text('Producto eliminado correctamente'), backgroundColor: Colors.green),
         );
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-             SnackBar(content: Text('Error al eliminar: $e'), backgroundColor: Colors.red)
+    } catch (e) { //[cite: 15]
+      if (mounted) { //[cite: 15]
+        ScaffoldMessenger.of(context).showSnackBar( //[cite: 15]
+          const SnackBar(content: Text('Producto eliminado localmente (se sincronizará al conectar)'), backgroundColor: Colors.orange),
         );
       }
     }
@@ -486,10 +506,20 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
         }
 
         if (newProducts.isNotEmpty) {
-          // Guardar o actualizar productos
-          await ref.read(inventoryRepositoryProvider).importProducts(newProducts);
+          final networkStatus = ref.read(networkConnectivityProvider);
+          final bool isOnline = networkStatus != NetworkStatus.offline;
+          final invRepo = ref.read(inventoryRepositoryProvider);
 
-          // --- 2. SOLUCIÓN CATEGORÍAS: GUARDADO PERMANENTE EN FIRESTORE ---
+          // Guardar o actualizar productos
+          if (isOnline) {
+            try {
+              await invRepo.importProducts(newProducts).timeout(const Duration(seconds: 4));
+            } catch (_) {}
+          } else {
+            invRepo.importProducts(newProducts).catchError((_) {});
+          }
+
+          // Guardado de categorías
           Set<String> importedCategories = newProducts
               .map((p) => p.category.trim())
               .where((c) => c.isNotEmpty && c != 'General')
@@ -498,26 +528,38 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
           final companyId = ref.read(companyIdProvider).value;
           
           if (companyId != null && importedCategories.isNotEmpty) {
-            // Esto escribe directamente en la base de datos de configuración de tu empresa
-            await FirebaseFirestore.instance
+            final catDoc = FirebaseFirestore.instance
                 .collection('companies')
                 .doc(companyId)
                 .collection('config')
-                .doc('inventory')
-                .set({
-                  // arrayUnion agrega las categorías nuevas sin borrar las que ya tenías
+                .doc('inventory');
+
+            if (isOnline) {
+              try {
+                await catDoc.set({
                   'categories': FieldValue.arrayUnion(importedCategories.toList()) 
-                }, SetOptions(merge: true));
+                }, SetOptions(merge: true)).timeout(const Duration(seconds: 2));
+              } catch (_) {}
+            } else {
+              catDoc.set({
+                'categories': FieldValue.arrayUnion(importedCategories.toList()) 
+              }, SetOptions(merge: true)).catchError((_) {});
+            }
           }
 
-          // Actualizamos la pantalla al instante sin recargar
           for (String newCategory in importedCategories) {
             ref.read(productCategoriesProvider.notifier).add(newCategory);
           }
 
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('✅ Se importaron/actualizaron ${newProducts.length} productos'), backgroundColor: Colors.green)
+              SnackBar(
+                content: Text(isOnline 
+                  ? '✅ Se importaron/actualizaron ${newProducts.length} productos'
+                  : 'ℹ️ ${newProducts.length} productos procesados en local'
+                ), 
+                backgroundColor: isOnline ? Colors.green : Colors.orange,
+              ),
             );
           }
         } else {

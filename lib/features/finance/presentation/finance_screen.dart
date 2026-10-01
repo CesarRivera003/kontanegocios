@@ -18,6 +18,7 @@ import '../../auth/presentation/auth_providers.dart';
 import '../../cash/data/cash_repository.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../home/presentation/dashboard_shell.dart';
+import '../../../core/services/network_connectivity_service.dart';
 
 // =============================================================================
 // CEREBRO: CÁLCULO EN VIVO DE CAJAS (A PRUEBA DE FALLOS Y CIERRES)
@@ -32,103 +33,100 @@ final liveCashRegistersProvider = FutureProvider<Map<String, double>>((ref) asyn
 
   Map<String, double> balances = {};
 
-  final usersSnap = await firestore.collection('companies').doc(companyId).collection('users').get();
-  final now = DateTime.now();
-  final startOfDay = DateTime(now.year, now.month, now.day);
-  final endOfDay = startOfDay.add(const Duration(days: 1));
+  try {
+    final now = DateTime.now();
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
 
-  // --- 1. NUEVO: BUSCAR QUIÉNES YA CERRARON CAJA HOY ---
-  final closuresSnap = await firestore.collection('companies').doc(companyId).collection('cash_closures')
-      .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-      .where('date', isLessThan: Timestamp.fromDate(endOfDay)).get();
+    // Consultas con soporte para servidor y caché local
+    final usersSnap = await firestore.collection('companies').doc(companyId).collection('users')
+        .get(const GetOptions(source: Source.serverAndCache)).timeout(const Duration(seconds: 2), onTimeout: () => firestore.collection('companies').doc(companyId).collection('users').get(const GetOptions(source: Source.cache)));
 
-  // Guardamos a los que cerraron y su base de mañana en un mapa {userId: baseParaMañana}
-  Map<String, double> closedUsers = {};
-  for (var doc in closuresSnap.docs) {
-    final data = doc.data();
-    final uid = data['userId'] as String?;
-    final nextBase = (data['nextDayBase'] ?? 0).toDouble();
-    if (uid != null) closedUsers[uid] = nextBase;
-  }
+    final closuresSnap = await firestore.collection('companies').doc(companyId).collection('cash_closures')
+        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
+        .get(const GetOptions(source: Source.serverAndCache)).timeout(const Duration(seconds: 2), onTimeout: () => firestore.collection('companies').doc(companyId).collection('cash_closures').where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay)).where('date', isLessThan: Timestamp.fromDate(endOfDay)).get(const GetOptions(source: Source.cache)));
 
-  // Traer entradas y salidas manuales
-  final moveSnap = await firestore.collection('companies').doc(companyId).collection('cash_movements')
-      .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
-      .where('date', isLessThan: Timestamp.fromDate(endOfDay)).get();
+    Map<String, double> closedUsers = {};
+    for (var doc in closuresSnap.docs) {
+      final data = doc.data();
+      final uid = data['userId'] as String?;
+      final nextBase = (data['nextDayBase'] ?? 0).toDouble();
+      if (uid != null) closedUsers[uid] = nextBase;
+    }
 
-  // --- 2. CREAMOS UNA LISTA CON TODOS ---
-  List<Map<String, dynamic>> allUsersToEvaluate = [];
-  if (currentUser != null) {
-    allUsersToEvaluate.add({
-      'id': currentUser.id ?? companyId,
-      'name': currentUser.name,
-      'role': currentUser.role.name,
-    });
-  }
-  // B. Agregamos a los empleados
-  for (var doc in usersSnap.docs) {
-    // ¡LA SOLUCIÓN! Si el empleado de la BD es el mismo dueño que ya agregamos arriba, lo saltamos
-    if (currentUser != null && doc.id == currentUser.id) continue;
-    
-    allUsersToEvaluate.add({
-      'id': doc.id,
-      'name': doc.data()['name'] ?? 'Usuario',
-      'role': doc.data()['role'] ?? 'cashier',
-    });
-  }
+    final moveSnap = await firestore.collection('companies').doc(companyId).collection('cash_movements')
+        .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay))
+        .where('date', isLessThan: Timestamp.fromDate(endOfDay))
+        .get(const GetOptions(source: Source.serverAndCache)).timeout(const Duration(seconds: 2), onTimeout: () => firestore.collection('companies').doc(companyId).collection('cash_movements').where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfDay)).where('date', isLessThan: Timestamp.fromDate(endOfDay)).get(const GetOptions(source: Source.cache)));
 
-  // --- 3. REVISAMOS LA CAJA DE CADA UNO ---
-  for (var u in allUsersToEvaluate) {
-    final userId = u['id'];
-    final userName = u['name'];
-    final role = u['role'];
+    List<Map<String, dynamic>> allUsersToEvaluate = [];
+    if (currentUser != null) {
+      allUsersToEvaluate.add({
+        'id': currentUser.id ?? companyId,
+        'name': currentUser.name,
+        'role': currentUser.role.name,
+      });
+    }
 
-    // Verificamos si este usuario está en la lista de cajas cerradas
-    final isClosed = closedUsers.containsKey(userId);
-    
-    double balance = 0;
-    double salesTotal = 0;
-    double baseTotal = 0;
+    for (var doc in usersSnap.docs) {
+      if (currentUser != null && doc.id == currentUser.id) continue;
+      
+      allUsersToEvaluate.add({
+        'id': doc.id,
+        'name': doc.data()['name'] ?? 'Usuario',
+        'role': doc.data()['role'] ?? 'cashier',
+      });
+    }
 
-    if (isClosed) {
-      // ¡MAGIA! Si está cerrada, ignoramos las ventas y solo mostramos la base de mañana
-      balance = closedUsers[userId]!;
-    } else {
-      // Si está abierta, hacemos la matemática normal
-      final totals = await cashRepo.getUserDailyTotals(userName: userName, canHaveExpenses: true);
-      final base = await cashRepo.getBaseDraft(userId);
-      salesTotal = totals['sales']!;
-      baseTotal = base;
+    for (var u in allUsersToEvaluate) {
+      final userId = u['id'];
+      final userName = u['name'];
+      final role = u['role'];
 
-      double manualIn = 0;
-      double manualOut = 0;
+      final isClosed = closedUsers.containsKey(userId);
+      
+      double balance = 0;
+      double salesTotal = 0;
+      double baseTotal = 0;
 
-      for (var m in moveSnap.docs) {
-        if (m.data()['userId'] == userId) {
-          final amt = (m.data()['amount'] ?? 0).toDouble();
-          final typeStr = m.data()['type'].toString().trim().toLowerCase();
-          
-          if (typeStr == 'income' || typeStr == '0' || typeStr.contains('ingreso') || typeStr == 'in') {
-            manualIn += amt;
-          } else {
-            manualOut += amt;
+      if (isClosed) {
+        balance = closedUsers[userId]!;
+      } else {
+        final totals = await cashRepo.getUserDailyTotals(userName: userName, canHaveExpenses: true);
+        final base = await cashRepo.getBaseDraft(userId);
+        salesTotal = totals['sales']!;
+        baseTotal = base;
+
+        double manualIn = 0;
+        double manualOut = 0;
+
+        for (var m in moveSnap.docs) {
+          if (m.data()['userId'] == userId) {
+            final amt = (m.data()['amount'] ?? 0).toDouble();
+            final typeStr = m.data()['type'].toString().trim().toLowerCase();
+            
+            if (typeStr == 'income' || typeStr == '0' || typeStr.contains('ingreso') || typeStr == 'in') {
+              manualIn += amt;
+            } else {
+              manualOut += amt;
+            }
           }
         }
+        balance = (base + salesTotal + manualIn) - (totals['expenses']! + manualOut);
       }
-      balance = (base + salesTotal + manualIn) - (totals['expenses']! + manualOut);
-    }
 
-    // Filtro para mostrar solo a quienes tienen movimiento o dejaron caja cerrada
-    if (balance > 0 || salesTotal > 0 || baseTotal > 0 || isClosed) {
-      String displayName = (role == 'admin' || role == 'Dueño') ? 'Admin ($userName)' : userName;
-      
-      // Le agregamos la etiqueta visual para que el Administrador sepa que ya terminaron turno
-      if (isClosed) displayName += ' (Cerrada)'; 
-      
-      if (!balances.containsKey(displayName)) {
-         balances[displayName] = balance;
+      if (balance > 0 || salesTotal > 0 || baseTotal > 0 || isClosed) {
+        String displayName = (role == 'admin' || role == 'Dueño') ? 'Admin ($userName)' : userName;
+        if (isClosed) displayName += ' (Cerrada)'; 
+        
+        if (!balances.containsKey(displayName)) {
+           balances[displayName] = balance;
+        }
       }
     }
+  } catch (e) {
+    debugPrint("Aviso calculando cajas en vivo: $e");
   }
 
   return balances;
@@ -261,16 +259,14 @@ class FinanceScreen extends ConsumerWidget {
               ElevatedButton(
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.indigo),
                 onPressed: () async {
-                  // CORRECCIÓN: Expresión regular para ignorar letras, comas o símbolos del teclado móvil
                   final String cleanText = amountCtrl.text.replaceAll(RegExp(r'[^0-9]'), '');
                   final amount = double.tryParse(cleanText) ?? 0.0;
                   
-                  // --- ALERTA DE VALIDACIÓN ---
                   if (sourceId == null || destId == null || amount <= 0) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text("Por favor selecciona origen, destino y un monto mayor a 0."), backgroundColor: Colors.orange)
                     );
-                    return; // Detenemos el guardado
+                    return;
                   }
                   if (sourceId == destId) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -282,16 +278,44 @@ class FinanceScreen extends ConsumerWidget {
                   final sourceAccount = accounts.firstWhere((a) => a.id == sourceId);
                   final destAccount = accounts.firstWhere((a) => a.id == destId);
 
-                  await ref.read(financeRepositoryProvider).transferFunds(
-                    sourceAccountId: sourceId!,
-                    destinationAccountId: destId!,
-                    amount: amount,
-                    description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
-                  );
+                  // 1. Detectar conectividad
+                  final networkStatus = ref.read(networkConnectivityProvider);
+                  final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                  final financeRepo = ref.read(financeRepositoryProvider);
+                  
+                  if (isOnline) {
+                    try {
+                      await financeRepo.transferFunds(
+                        sourceAccountId: sourceId!,
+                        destinationAccountId: destId!,
+                        amount: amount,
+                        description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
+                      ).timeout(const Duration(seconds: 3));
+                    } catch (e) {
+                      debugPrint("Timeout de red en transferencia: $e");
+                    }
+                  } else {
+                    // En offline: NO USAR AWAIT NI TIMEOUT
+                    // Se despacha directamente al caché local de Firestore
+                    financeRepo.transferFunds(
+                      sourceAccountId: sourceId!,
+                      destinationAccountId: destId!,
+                      amount: amount,
+                      description: "${sourceAccount.name} -> ${destAccount.name} (${noteCtrl.text})",
+                    ).catchError((err) {
+                      debugPrint("Transferencia encolada en caché local: $err");
+                    });
+                  }
                   
                   if (context.mounted) {
                     Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Transferencia exitosa"), backgroundColor: Colors.green));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(isOnline ? "Transferencia exitosa" : "ℹ️ Transferencia registrada localmente (se sincronizará al conectar)"), 
+                        backgroundColor: isOnline ? Colors.green : Colors.orange
+                      )
+                    );
                   }
                 },
                 child: const Text('Transferir', style: TextStyle(color: Colors.white)),
@@ -527,7 +551,6 @@ class _AccountsListTabState extends ConsumerState<_AccountsListTab> {
           ElevatedButton(
             onPressed: () async {
               final name = nameCtrl.text.trim();
-              // --- CORRECCIÓN: Limpiar el formato antes de guardar ---
               final cleanBalance = balanceCtrl.text.replaceAll(RegExp(r'[^0-9]'), '');
               final balance = double.tryParse(cleanBalance) ?? 0.0;
               
@@ -537,9 +560,21 @@ class _AccountsListTabState extends ConsumerState<_AccountsListTab> {
                   name: name, 
                   balance: balance,
                   isCash: isCash,
-                  isDefault: false // Por defecto no es la principal al crearla
+                  isDefault: false
                 );
-                await ref.read(financeRepositoryProvider).createAccount(newAccount);
+
+                final networkStatus = ref.read(networkConnectivityProvider);
+                final bool isOnline = networkStatus != NetworkStatus.offline;
+
+                final financeRepo = ref.read(financeRepositoryProvider);
+                if (isOnline) {
+                  try {
+                    await financeRepo.createAccount(newAccount).timeout(const Duration(seconds: 2));
+                  } catch (_) {}
+                } else {
+                  financeRepo.createAccount(newAccount).catchError((_) {});
+                }
+
                 if (context.mounted) Navigator.pop(ctx);
               }
             },

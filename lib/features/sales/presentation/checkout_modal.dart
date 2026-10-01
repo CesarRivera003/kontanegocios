@@ -230,6 +230,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
       final networkStatus = ref.read(networkConnectivityProvider);
       final bool isOnline = networkStatus != NetworkStatus.offline;
 
+
       // 2. GUARDAR VENTA
       final newSale = await ref.read(salesRepositoryProvider).processSale(
         cartItems: cart.items,
@@ -238,11 +239,12 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         paymentDeadline: deadline,
         clientName: cart.clientName,
         sellerName: finalSellerName,
+        userCode: userProfile?.userCode,
         additionalCosts: allCosts,
         customId: officialId,
         isElectronicInvoice: _generateElectronicInvoice,  
         client: clienteParaFactura,
-        isOnline: isOnline, // <-- PASAMOS LA CONECTIVIDAD AQUÍ
+        isOnline: isOnline,
       );
 
       if (!isOnline && _generateElectronicInvoice) {
@@ -255,7 +257,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         );
       }
 
-      // 3. REGISTRAR EN TESORERÍA (CON DESCUENTO DE VUELTAS)
+      // 3. REGISTRAR EN TESORERÍA (RESTAURADO CON SOPORTE OFFLINE)
       final financeRepo = ref.read(financeRepositoryProvider);
       
       for (var payment in _payments) {
@@ -263,7 +265,10 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         double amountToRegister = payment.amount; 
 
         if (payment.method == 'Efectivo') {
-          final cashAccount = accounts.firstWhere((a) => a.isDefault && a.isCash && a.isActive, orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first));
+          final cashAccount = accounts.firstWhere(
+            (a) => a.isDefault && a.isCash && a.isActive, 
+            orElse: () => accounts.firstWhere((a) => a.isCash && a.isActive, orElse: () => accounts.first),
+          );
           targetAccountId = cashAccount.id;
 
           if (changeRemaining > 0) {
@@ -275,8 +280,7 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
               amountToRegister = 0;
             }
           }
-        } 
-        else if (payment.method == 'Transferencia' && payment.bankName != null) {
+        } else if (payment.method == 'Transferencia' && payment.bankName != null) {
           try {
             final bankAccount = accounts.firstWhere((a) => a.name == payment.bankName);
             targetAccountId = bankAccount.id;
@@ -284,11 +288,30 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         }
 
         if (targetAccountId != null && amountToRegister > 0) {
-          await financeRepo.addTransaction(BankTransaction(
-            id: '', accountId: targetAccountId, type: 'SALE', amount: amountToRegister, 
+          final transaction = BankTransaction(
+            id: '', 
+            accountId: targetAccountId, 
+            type: 'SALE', 
+            amount: amountToRegister, 
             description: 'Venta #${newSale.ticketNumber ?? officialId} - ${cart.clientName}', 
-            date: DateTime.now(), relatedDocId: officialId
-          ));
+            date: DateTime.now(), 
+            relatedDocId: officialId,
+          );
+
+          if (isOnline) {
+            // Online: esperamos confirmación con límite de 2 segundos
+            try {
+              await financeRepo.addTransaction(transaction).timeout(const Duration(seconds: 2));
+            } catch (e) {
+              debugPrint("Timeout registrando transacción en red: $e");
+            }
+          } else {
+            // Offline: disparamos la transacción al repositorio local sin await bloqueante
+            // Firestore la escribe en IndexedDB/caché y actualizará el saldo de la caja de inmediato
+            financeRepo.addTransaction(transaction).catchError((err) {
+              debugPrint("Transacción de tesorería guardada en cola local: $err");
+            });
+          }
         }
       }
 
@@ -296,8 +319,6 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
       if (mounted) {
         ref.read(cartProvider.notifier).clear(); 
         Navigator.of(context).pop(); 
-        
-        // ¡Enviamos la venta real devuelta por la base de datos!
         _showSuccessDialog(context, newSale, companyProfile);
       }
 

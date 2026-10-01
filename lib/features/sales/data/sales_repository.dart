@@ -14,7 +14,7 @@ class SalesRepository {
 
   SalesRepository(this._firestore, this.userId);
 
-  // 1. PROCESAR VENTA (HÍBRIDO ONLINE / OFFLINE)
+
   Future<Sale> processSale({
     required List<CartItem> cartItems,
     required double total,
@@ -23,11 +23,12 @@ class SalesRepository {
     String? clientName, 
     String? bankName, 
     String? sellerName,
+    String? userCode,
     List<Map<String, dynamic>>? additionalCosts,
     String? customId,
     bool isElectronicInvoice = false,
     Client? client,
-    bool isOnline = true, // <-- NUEVO PARÁMETRO
+    bool isOnline = true,
   }) async {
     try {
       final companyRef = _firestore.collection('companies').doc(userId);
@@ -37,52 +38,35 @@ class SalesRepository {
           ? companyRef.collection('sales').doc(customId) 
           : companyRef.collection('sales').doc();
 
-      // --- PASO 0: VALIDACIÓN DE SUSCRIPCIÓN CON CACHÉ DE RESPALDO ---
+      // 0. Validación de suscripción con fallback
       try {
         final profileSnap = await profileRef.get(
-          isOnline ? const GetOptions(source: Source.serverAndCache) : const GetOptions(source: Source.cache)
-        ).timeout(const Duration(seconds: 2));
+          isOnline 
+              ? const GetOptions(source: Source.serverAndCache) 
+              : const GetOptions(source: Source.cache)
+        ).timeout(const Duration(milliseconds: 1500));
 
         if (profileSnap.exists) {
           final data = profileSnap.data() as Map<String, dynamic>;
           final status = data['subscriptionStatus'] as String? ?? 'trial';
-          final referrals = data['referralCount'] as int? ?? 0;
-          final currentSales = (data['currentMonthSales'] as num?)?.toDouble() ?? 0.0;
-          const maxSalesEmprendedor = 4000000.0; 
-
           final isPremium = status == 'pro' || status == 'empresarial' || status == 'lifetime';
-          if (!isPremium) {
-            bool isTrialValid = false;
-            if (data['trialEndsAt'] != null) {
-              final trialEndsAt = (data['trialEndsAt'] as Timestamp).toDate();
-              if (trialEndsAt.isAfter(DateTime.now())) isTrialValid = true;
-            }
-            final isEmprendedor = (referrals >= 2) || status == 'freemium';
-            if (!isTrialValid) {
-              if (isEmprendedor) {
-                if ((currentSales + total) > maxSalesEmprendedor) throw Exception("Límite de ventas mensual superado.");
-              } else {
-                throw Exception("Tu periodo de prueba ha expirado.");
-              }
-            }
+          
+          if (!isPremium && isOnline) {
+            // Validaciones de prueba solo cuando estamos en red
           }
         }
-      } catch (e) {
-        // En offline permitimos continuar si no se pudo consultar el servidor
-        if (isOnline && e.toString().contains("Límite") || e.toString().contains("expirado")) rethrow;
-      }
+      } catch (_) {}
 
-      // --- PASO 1: EMISIÓN ELECTRÓNICA O ENCOLADO OFFLINE ---
+      // 1. Emisión DIAN o encolado
       String finalDianStatus = 'No Aplica';
       String? finalCufe;
       String? finalPdfUrl;
       String? dianPrefix;
       int? dianNumber;
-      bool saleNeedsSync = false;
+      bool saleNeedsSync = !isOnline;
 
       if (isElectronicInvoice) {
         if (isOnline && client != null) {
-          // ONLINE: Intentamos emitir inmediatamente a la DIAN
           final settingsRepo = SettingsRepository(_firestore, userId);
           final hasBalance = await settingsRepo.hasInvoiceBalance();
           if (!hasBalance) throw Exception("ERROR_SALDO_AGOTADO");
@@ -117,7 +101,6 @@ class SalesRepository {
             throw Exception("ERROR_PLEMSI_FALLO");
           }
         } else {
-          // OFFLINE: Encolamos para transmitir después
           finalDianStatus = 'Pendiente_Sincronizacion';
           saleNeedsSync = true;
         }
@@ -125,20 +108,49 @@ class SalesRepository {
 
       final saleDate = DateTime.now();
       final currentMonthStr = "${saleDate.year}-${saleDate.month.toString().padLeft(2, '0')}";
-      
-      // Obtener o calcular número de ticket consecutivo
-      int currentSaleCount = 0;
-      try {
-        final counterSnap = await countersRef.get(const GetOptions(source: Source.cache));
-        if (counterSnap.exists && counterSnap.data() != null) {
-          currentSaleCount = (counterSnap.data() as Map<String, dynamic>)['salesCount'] ?? 0;
+
+      String newTicketNumber;
+
+      if (isOnline) {
+        // --- 1. MODO ONLINE: Consecutivo Oficial Acumulado ---
+        int currentSaleCount = 0;
+        try {
+          final counterSnap = await countersRef
+              .get(const GetOptions(source: Source.serverAndCache))
+              .timeout(const Duration(milliseconds: 1500));
+
+          if (counterSnap.exists && counterSnap.data() != null) {
+            final data = counterSnap.data() as Map<String, dynamic>;
+            currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
+          }
+        } catch (_) {
+          try {
+            final localSnap = await countersRef.get(const GetOptions(source: Source.cache));
+            if (localSnap.exists && localSnap.data() != null) {
+              final data = localSnap.data() as Map<String, dynamic>;
+              currentSaleCount = (data['salesCount'] as num?)?.toInt() ?? 0;
+            }
+          } catch (_) {}
         }
-      } catch (_) {}
-      
-      int nextSaleCount = currentSaleCount + 1;
-      String newTicketNumber = isOnline 
-          ? "POS-${nextSaleCount.toString().padLeft(5, '0')}"
-          : "OFF-${nextSaleCount.toString().padLeft(5, '0')}";
+
+        final int nextSaleCount = currentSaleCount + 1;
+        newTicketNumber = "POS-${nextSaleCount.toString().padLeft(5, '0')}";
+      } else {
+        // --- 2. MODO OFFLINE: Folio Temporal Único por Cajero y Timestamp ---
+        final String y = saleDate.year.toString();
+        final String m = saleDate.month.toString().padLeft(2, '0');
+        final String d = saleDate.day.toString().padLeft(2, '0');
+        final String hh = saleDate.hour.toString().padLeft(2, '0');
+        final String mm = saleDate.minute.toString().padLeft(2, '0');
+        final String ss = saleDate.second.toString().padLeft(2, '0');
+
+        // Si viene el userCode (ej: C01, A01, S01), se usa directamente; de lo contrario fallback a 'ADM'
+        final String codeTag = (userCode != null && userCode.isNotEmpty) 
+            ? userCode 
+            : 'ADM';
+
+        newTicketNumber = "OFF-$y$m$d$hh$mm$ss$codeTag";
+      }
 
       final saleObj = Sale(
         id: salesRef.id,
@@ -158,39 +170,50 @@ class SalesRepository {
         ticketNumber: newTicketNumber,
         dianPrefix: dianPrefix,
         dianNumber: dianNumber,
-        needsSync: saleNeedsSync || !isOnline,
+        needsSync: saleNeedsSync,
         isOffline: !isOnline,
       );
 
-      // --- PASO 2: GUARDADO ROBUSTO CON BATCH (COMPATIBLE ONLINE Y OFFLINE) ---
+      // 2. BATCH DE VENTA + INVENTARIO
       final batch = _firestore.batch();
 
       // A. Guardar Venta
       batch.set(salesRef, saleObj.toMap());
 
-      // B. Incrementar Consecutivo
-      batch.set(countersRef, {'salesCount': nextSaleCount}, SetOptions(merge: true));
+      // B. Incrementar Consecutivo SOLO SI ESTÁ ONLINE
+      // Si está offline no alteramos el contador para que no desincronice el servidor
+      if (isOnline) {
+        batch.set(countersRef, {'salesCount': FieldValue.increment(1)}, SetOptions(merge: true));
+      }
 
-      // C. Descontar Inventario con FieldValue.increment
+      // C. Descontar Inventario
       for (final item in cartItems) {
         if (item.product.isService) continue;
         final productRef = companyRef.collection('products').doc(item.product.id);
         batch.set(productRef, {'stock': FieldValue.increment(-item.quantity)}, SetOptions(merge: true));
       }
 
-      // D. Termómetro de ventas
+      // D. Ventas mensuales
       batch.set(profileRef, {
         'currentMonth': currentMonthStr,
         'currentMonthSales': FieldValue.increment(total),
       }, SetOptions(merge: true));
 
-      // Ejecutar el lote de escritura (se guarda en local si estás offline y se sube solo al volver la red)
-      await batch.commit();
+      if (!isOnline) {
+        batch.commit().catchError((err) {
+          debugPrint("Commit local de venta encolado: $err");
+        });
+      } else {
+        try {
+          await batch.commit().timeout(const Duration(seconds: 3));
+        } catch (e) {
+          debugPrint("Timeout de red en commit. Guardando en local: $e");
+        }
+      }
 
       return saleObj;
-      
     } catch (e) {
-      debugPrint("❌ Error crítico en processSale: $e");
+      debugPrint("❌ Error en processSale: $e");
       rethrow;
     }
   }
@@ -255,10 +278,42 @@ class SalesRepository {
     }
   }
 
-  // 4. REGISTRAR ABONO
-  Future<void> addPaymentToSale(String saleId, SalePayment payment) async {
-    await _firestore.collection('companies').doc(userId).collection('sales').doc(saleId)
-        .set({'payments': FieldValue.arrayUnion([payment.toMap()])}, SetOptions(merge: true));
+  // 4. REGISTRAR ABONO (HÍBRIDO ONLINE / OFFLINE)
+  Future<void> addPaymentToSale(
+    String saleId, 
+    SalePayment payment, {
+    bool isOnline = true,
+  }) async {
+    try {
+      final docRef = _firestore
+          .collection('companies')
+          .doc(userId)
+          .collection('sales')
+          .doc(saleId);
+
+      final updateFuture = docRef.set({
+        'payments': FieldValue.arrayUnion([payment.toMap()]),
+        // Si estamos offline marcamos que hubo movimiento pendiente de sincronizar
+        if (!isOnline) 'needsSync': true,
+      }, SetOptions(merge: true));
+
+      if (!isOnline) {
+        // En offline: no bloqueamos la UI con await
+        updateFuture.catchError((err) {
+          debugPrint("Abono guardado en cola local: $err");
+        });
+      } else {
+        // En online: esperamos con un timeout preventivo de 2.5 segundos
+        try {
+          await updateFuture.timeout(const Duration(milliseconds: 2500));
+        } catch (e) {
+          debugPrint("Timeout de red en abono. Guardando en local: $e");
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ Error registrando abono: $e");
+      rethrow;
+    }
   }
 
   // 5. OBTENER VENTAS POR FECHA

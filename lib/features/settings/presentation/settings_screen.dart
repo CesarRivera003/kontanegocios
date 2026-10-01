@@ -13,6 +13,8 @@ import '../../auth/domain/user_model.dart'; // Para UserRole
 import '../../inventory/presentation/inventory_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import '../../clients/presentation/client_providers.dart';
+import '../../../core/services/network_connectivity_service.dart';
+import '../../../core/utils/user_code_generator.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -20,6 +22,81 @@ class SettingsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isMobile = MediaQuery.of(context).size.width <= 900;
+
+    // 🔒 REGLA DE SEGURIDAD OFFLINE: Configuración solo con internet
+    final networkStatus = ref.watch(networkConnectivityProvider);
+    final bool isOnline = networkStatus != NetworkStatus.offline;
+
+    if (!isOnline) {
+      return Scaffold(
+        backgroundColor: Colors.grey[50],
+        appBar: AppBar(
+          leading: isMobile ? IconButton(
+            icon: const Icon(Icons.menu),
+            onPressed: () {
+              DashboardShell.scaffoldKey.currentState?.openDrawer();
+            },
+          ) : null,
+          title: const Text('Configuración'),
+        ),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 30),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.shade50,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.cloud_off_rounded,
+                    size: 64,
+                    color: Colors.orange.shade700,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  'Sección no disponible sin internet',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'Los ajustes de empresa, seguridad, PIN, usuarios y facturación DIAN requieren conexión activa para garantizar la seguridad de tus datos.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey.shade600,
+                    height: 1.4,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 25),
+                OutlinedButton.icon(
+                  onPressed: () {
+                    // Fuerza un re-chequeo manual inmediato de la conexión
+                    ref.read(networkConnectivityProvider.notifier).checkConnectionNow();
+                  },
+                  icon: const Icon(Icons.refresh),
+                  label: const Text('Reintentar conexión'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.indigo,
+                    side: const BorderSide(color: Colors.indigo),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     
     final profileAsync = ref.watch(companyProfileProvider);
     final user = ref.watch(authRepositoryProvider).currentUser;
@@ -105,9 +182,8 @@ class SettingsScreen extends ConsumerWidget {
           // NUEVO: CAMBIAR NOMBRE DE USUARIO
           _SettingsTile(
             icon: Icons.badge_outlined,
-            title: 'Mi Nombre',
-            // Muestra el nombre actual o "Usuario"
-            subtitle: userProfile?.name ?? 'Personalizar nombre',
+            title: userProfile?.name ?? 'Mi Nombre',
+            subtitle: 'ID: ${userProfile?.userCode ?? 'S/C'} • Usuario: @${userProfile?.username ?? 'sin_usuario'}',
             trailing: const Icon(Icons.edit, size: 16, color: Colors.blue),
             onTap: () => _showEditNameDialog(context, ref, userProfile),
           ),
@@ -353,16 +429,43 @@ class SettingsScreen extends ConsumerWidget {
                     final docSnap = await userRef.get();
                     
                     if (docSnap.exists) {
-                      // Si ya existe (cajero normal o admin ya registrado), solo actualizamos el nombre
-                      await userRef.update({'name': newName});
+                      // 1. SI YA EXISTE:
+                      final data = docSnap.data() ?? {};
+                      
+                      // Si no tenía userCode o username (usuarios viejos), se los generamos de una vez
+                      final String? existingCode = data['userCode'];
+                      final String? existingUsername = data['username'];
+
+                      Map<String, dynamic> updatePayload = {
+                        'name': newName,
+                      };
+
+                      // Si le faltaba el código (admin viejo -> A01, cajero viejo -> C01)
+                      if (existingCode == null || existingCode.isEmpty) {
+                        updatePayload['userCode'] = (data['role'] == 'admin' || user.role.name == 'admin') ? 'A01' : 'C01';
+                      }
+
+                      // Si le faltaba el username, se lo autogeneramos a partir de su nombre
+                      if (existingUsername == null || existingUsername.isEmpty) {
+                        updatePayload['username'] = UserCodeGenerator.generateUsername(
+                          fullName: newName,
+                          existingUsernames: [],
+                        );
+                      }
+
+                      await userRef.update(updatePayload);
                     } else {
-                      // Si NO existe (Es el dueño original la primera vez), creamos el perfil completo
-                      // para estandarizar la base de datos
+                      // 2. SI NO EXISTE (Dueño original la primera vez):
                       await userRef.set({
                         'id': user.id,
                         'name': newName,
                         'email': user.email,
                         'role': 'admin', // Forzamos el rol supremo
+                        'username': UserCodeGenerator.generateUsername(
+                          fullName: newName, 
+                          existingUsernames: [],
+                        ),
+                        'userCode': 'A01', // El administrador principal siempre conserva A01
                         'isActive': true,
                         'createdAt': FieldValue.serverTimestamp(),
                       });
