@@ -117,6 +117,104 @@ class ReportsRepository {
       return UserStat(sellerName, totalSold, totalCommission);
     }).toList();
 
+    // --- NUEVAS MÉTRICAS ESTRATÉGICAS ---
+
+    // 1. Ticket Promedio y Tamaño de Cesta
+    double averageTicket = 0.0;
+    double averageBasketSize = 0.0;
+    double totalUnitsSold = 0.0;
+
+    for (var sale in sales) {
+      for (var item in sale.items) {
+        totalUnitsSold += (item['quantity'] as num).toDouble();
+      }
+    }
+
+    if (sales.isNotEmpty) {
+      averageTicket = totalIncome / sales.length;
+      averageBasketSize = totalUnitsSold / sales.length;
+    }
+
+    // 2. Matriz de Inventario Inteligente y Capital Inmovilizado
+    final stars = <MatrixItem>[];
+    final hooks = <MatrixItem>[];
+    final opportunities = <MatrixItem>[];
+    final deadStock = <MatrixItem>[];
+    double immobilizedCapital = 0.0;
+
+    // Calculamos los promedios para definir los cuadrantes
+    double avgRotation = 0.0;
+    double avgMargin = 0.0;
+    int productsWithSales = 0;
+
+    for (var p in products) {
+      if (p.isService) continue;
+      final rotation = productQtyMap[p.name] ?? 0.0;
+      if (rotation > 0) {
+        avgRotation += rotation;
+        avgMargin += (p.price - p.cost);
+        productsWithSales++;
+      }
+    }
+
+    if (productsWithSales > 0) {
+      avgRotation /= productsWithSales;
+      avgMargin /= productsWithSales;
+    }
+
+    for (var p in products) {
+      if (p.isService) continue;
+
+      final rotation = productQtyMap[p.name] ?? 0.0;
+      final margin = p.price - p.cost;
+
+      if (rotation == 0 && p.stock > 0) {
+        deadStock.add(MatrixItem(name: p.name, stock: p.stock, margin: margin, rotation: rotation));
+        immobilizedCapital += (p.stock * p.cost);
+      } else if (rotation > 0) {
+        final item = MatrixItem(name: p.name, stock: p.stock, margin: margin, rotation: rotation);
+        if (rotation >= avgRotation && margin >= avgMargin) {
+          stars.add(item);
+        } else if (rotation >= avgRotation && margin < avgMargin) {
+          hooks.add(item);
+        } else if (rotation < avgRotation && margin >= avgMargin) {
+          opportunities.add(item);
+        } else {
+          // Si tiene baja rotación y bajo margen, lo mandamos a oportunidad por ahora
+          opportunities.add(item);
+        }
+      }
+    }
+
+    // 3. Horas y Días Pico de Venta
+    final dayCounts = <int, int>{}; // 1 = Lunes, 7 = Domingo
+    final hourBlocks = <String, int>{}; // 'Mañana' (6-12), 'Tarde' (12-18), 'Noche' (18-24)
+
+    for (var s in sales) {
+      final h = s.date.hour;
+      final d = s.date.weekday;
+
+      dayCounts.update(d, (v) => v + 1, ifAbsent: () => 1);
+
+      String block = 'Noche'; // 18-5
+      if (h >= 6 && h < 12) block = 'Mañana';
+      else if (h >= 12 && h < 18) block = 'Tarde';
+
+      hourBlocks.update(block, (v) => v + 1, ifAbsent: () => 1);
+    }
+
+    String peakSalesDay = 'N/A';
+    if (dayCounts.isNotEmpty) {
+      final bestDayIndex = dayCounts.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+      peakSalesDay = _getWeekdayName(bestDayIndex);
+    }
+
+    String peakSalesHourRange = 'N/A';
+    if (hourBlocks.isNotEmpty) {
+      peakSalesHourRange = hourBlocks.entries.reduce((a, b) => a.value > b.value ? a : b).key;
+    }
+
+
     // 11. Resumen Anual (Mes a Mes)
     final monthlyData = <int, MonthlyStat>{}; 
     for (var s in sales) {
@@ -144,11 +242,23 @@ class ReportsRepository {
       userStats: userStatsList, // Ahora envía comisiones reales
       lowStockAlerts: alerts,
       monthlyStats: monthlyStatsList,
+      averageTicket: averageTicket,
+      averageBasketSize: averageBasketSize,
+      inventoryMatrix: InventoryMatrix(
+        stars: stars,
+        hooks: hooks,
+        opportunities: opportunities,
+        deadStock: deadStock,
+      ),
+      immobilizedCapital: immobilizedCapital,
+      peakSalesDay: peakSalesDay,
+      peakSalesHourRange: peakSalesHourRange,
     );
   }
 
   String _getMonthName(int m) => ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][m-1];
   int _getMonthIndex(String m) => ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'].indexOf(m);
+  String _getWeekdayName(int d) => ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'][d-1];
 }
 
 // ... providers igual ...
