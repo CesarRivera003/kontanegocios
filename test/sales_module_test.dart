@@ -2,28 +2,33 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:konta_gestor/features/sales/domain/sale_model.dart';
 import 'package:konta_gestor/features/sales/domain/cart_item_model.dart';
 import 'package:konta_gestor/features/inventory/domain/product_model.dart';
-import 'package:konta_gestor/features/sales/presentation/cart_provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 void main() {
   group('POS Sales - Model Validations (Edge Cases)', () {
-    test('PaymentMethodDetail allows negative amounts', () {
-      final payment = PaymentMethodDetail(method: 'Efectivo', amount: -500);
-      // El modelo actualmente NO previene negativos, lo cual es un bug de dominio a reportar.
-      expect(payment.amount, -500);
+    test('PaymentMethodDetail prevents negative amounts in constructor', () {
+      expect(() => PaymentMethodDetail(method: 'Efectivo', amount: -500), throwsA(isA<AssertionError>()));
     });
 
-    test('Sale allows negative totals and payments', () {
-      final payment = PaymentMethodDetail(method: 'Efectivo', amount: -50);
-      final sale = Sale(
+    test('PaymentMethodDetail fromMap fallbacks negative to zero', () {
+      final payment = PaymentMethodDetail.fromMap({'method': 'Efectivo', 'amount': -500});
+      expect(payment.amount, 0.0);
+    });
+
+    test('Sale prevents negative totals', () {
+      final payment = PaymentMethodDetail(method: 'Efectivo', amount: 50);
+      expect(() => Sale(
         id: '1',
         date: DateTime.now(),
         total: -50,
         items: [],
         initialPayments: [payment]
-      );
-      // BUG: El modelo permite totales y pagos negativos
-      expect(sale.total, -50);
-      expect(sale.paidInInitial, -50);
+      ), throwsA(isA<AssertionError>()));
+    });
+
+    test('Sale fromMap fallbacks negative totals to zero', () {
+      final sale = Sale.fromMap({'date': Timestamp.now(), 'total': -50}, '1');
+      expect(sale.total, 0.0);
     });
 
     test('CartItem calculation with basic tax', () {
@@ -35,16 +40,18 @@ void main() {
       expect(item.totalTaxAmount, 38);
     });
 
-    test('CartItem handles quantity zero or negative', () {
+    test('CartItem handles quantity zero or negative by throwing AssertionError', () {
        final product = Product(id: '1', name: 'A', barcode: '1', price: 100, cost: 50, stock: 10, category: 'A');
-       final item = CartItem(product: product, quantity: -5, price: null);
+       expect(() => CartItem(product: product, quantity: -5, price: null), throwsA(isA<AssertionError>()));
+       expect(() => CartItem(product: product, quantity: 0, price: null), throwsA(isA<AssertionError>()));
+    });
 
-       // BUG: El modelo de CartItem no previene cantidades negativas
-       expect(item.quantity, -5);
-       expect(item.total, -500);
+    test('CartItem copyWith falls back securely', () {
+      final product = Product(id: '1', name: 'A', barcode: '1', price: 100, cost: 50, stock: 10, category: 'A');
+      final item = CartItem(product: product, quantity: 2, price: 100);
+      final invalidCopy = item.copyWith(quantity: -5, price: -10);
+      expect(invalidCopy.quantity, 2);
+      expect(invalidCopy.price, 100);
     });
   });
 }
-
-// No podemos testear fácilmente CartNotifier (Riverpod Notifier) con dependencias externas profundas sin un ProviderContainer
-// y mocks de Firebase, pero documentaremos los hallazgos basados en el análisis estático.

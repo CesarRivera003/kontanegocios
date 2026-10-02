@@ -30,6 +30,13 @@ class SalesRepository {
     Client? client,
     bool isOnline = true,
   }) async {
+    if (cartItems.isEmpty) {
+      throw Exception('InvalidSaleException: Cannot process a sale with an empty cart.');
+    }
+    if (total < 0) {
+      throw Exception('InvalidSaleException: Cannot process a sale with a negative total.');
+    }
+
     try {
       final companyRef = _firestore.collection('companies').doc(userId);
       final profileRef = companyRef.collection('config').doc('profile');

@@ -13,7 +13,7 @@ class PaymentMethodDetail {
     required this.amount,
     this.bankName,
     this.paymentDeadline,
-  });
+  }) : assert(amount >= 0, 'Payment amount cannot be negative');
 
   Map<String, dynamic> toMap() => {
     'method': method,
@@ -23,9 +23,10 @@ class PaymentMethodDetail {
   };
 
   factory PaymentMethodDetail.fromMap(Map<String, dynamic> map) {
+    double parsedAmount = (map['amount'] ?? 0).toDouble();
     return PaymentMethodDetail(
       method: map['method'] ?? 'Efectivo',
-      amount: (map['amount'] ?? 0).toDouble(),
+      amount: parsedAmount < 0 ? 0.0 : parsedAmount,
       bankName: map['bankName'],
       paymentDeadline: map['paymentDeadline'] != null ? (map['paymentDeadline'] as Timestamp).toDate() : null,
     );
@@ -45,7 +46,7 @@ class SalePayment {
     required this.note,
     this.method = 'Efectivo', 
     this.recordedBy = 'Admin', 
-  });
+  }) : assert(amount >= 0, 'Sale payment amount cannot be negative');
 
   Map<String, dynamic> toMap() => {
     'date': Timestamp.fromDate(date),
@@ -56,9 +57,10 @@ class SalePayment {
   };
 
   factory SalePayment.fromMap(Map<String, dynamic> map) {
+    double parsedAmount = (map['amount'] ?? 0).toDouble();
     return SalePayment(
       date: (map['date'] as Timestamp).toDate(),
-      amount: (map['amount'] ?? 0).toDouble(),
+      amount: parsedAmount < 0 ? 0.0 : parsedAmount,
       note: map['note'] ?? '',
       method: map['method'] ?? 'Efectivo', 
       recordedBy: map['recordedBy'] ?? '',
@@ -111,7 +113,7 @@ class Sale {
     this.dianNumber,
     this.needsSync = false,
     this.isOffline = false,
-  });
+  }) : assert(total >= 0, 'Sale total cannot be negative');
 
   double get paidInInitial => initialPayments.fold(0, (sum, p) => p.method == 'Crédito' ? sum : sum + p.amount);
   double get paidInInstallments => payments.fold(0, (sum, p) => sum + p.amount);
@@ -153,10 +155,11 @@ class Sale {
   }
 
   factory Sale.fromMap(Map<String, dynamic> map, String docId) {
+    double parsedTotal = (map['total'] ?? 0).toDouble();
     return Sale(
       id: docId,
       date: (map['date'] as Timestamp).toDate(),
-      total: (map['total'] ?? 0).toDouble(),
+      total: parsedTotal < 0 ? 0.0 : parsedTotal,
       items: List<Map<String, dynamic>>.from(map['items'] ?? []),
       clientName: map['clientName'],
       clientIdNumber: map['clientIdNumber'],
