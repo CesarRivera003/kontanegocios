@@ -38,11 +38,12 @@ void main() {
       expect(product.taxType, 'EXCLUIDO'); // default value check
     });
 
-    test('toMap should generate correct map', () {
+    test('toMap should generate correct map with sanitized string', () {
       final product = Product(
         id: '1',
-        name: 'Test Product',
+        name: '<script>alert(1)</script>',
         barcode: '12345',
+        description: 'Test <img src="x">',
         price: 100.0,
         cost: 50.0,
         stock: 10,
@@ -51,7 +52,8 @@ void main() {
 
       final map = product.toMap();
 
-      expect(map['name'], 'Test Product');
+      expect(map['name'], '&lt;script&gt;alert(1)&lt;/script&gt;');
+      expect(map['description'], 'Test &lt;img src="x"&gt;');
       expect(map['barcode'], '12345');
       expect(map['price'], 100.0);
       expect(map['cost'], 50.0);
@@ -59,27 +61,28 @@ void main() {
       expect(map['category'], 'Test Category');
     });
 
-    test('fromMap edge case handling: null safety and default values', () {
-      // Intentionally passing empty/null values that the model handles via fallbacks
-      final map = <String, dynamic>{};
+    test('fromMap edge case handling: negative fallback to zero', () {
+      final map = <String, dynamic>{
+        'price': -50.0,
+        'cost': -10.0,
+        'stock': -5,
+        'minStock': -2,
+        'commissionPercentage': -10.0,
+        'taxRate': -19.0
+      };
       final product = Product.fromMap(map, 'doc_123');
 
       expect(product.id, 'doc_123');
-      expect(product.name, '');
       expect(product.price, 0.0);
       expect(product.cost, 0.0);
       expect(product.stock, 0);
-      expect(product.category, 'General');
-      expect(product.unit, 'Und');
-      expect(product.isService, false);
-      expect(product.taxType, 'EXCLUIDO');
+      expect(product.minStock, 0);
+      expect(product.commissionPercentage, 0.0);
       expect(product.taxRate, 0.0);
     });
-  });
 
-  group('Product Edge Cases Analysis (To document in QA report)', () {
-    test('Model allows negative prices which should ideally be prevented at domain or UI level', () {
-      final product = Product(
+    test('Constructor throws AssertionError for negative values', () {
+      expect(() => Product(
         id: '1',
         name: 'Negative Price',
         barcode: '123',
@@ -87,11 +90,27 @@ void main() {
         cost: 0,
         stock: 0,
         category: 'Test',
-      );
+      ), throwsA(isA<AssertionError>()));
 
-      // En este momento el modelo SÍ permite negativos. Esto es un bug de dominio
-      // que documentaremos en el reporte.
-      expect(product.price, -500.0);
+      expect(() => Product(
+        id: '1',
+        name: 'Negative Cost',
+        barcode: '123',
+        price: 10,
+        cost: -10,
+        stock: 0,
+        category: 'Test',
+      ), throwsA(isA<AssertionError>()));
+
+      expect(() => Product(
+        id: '1',
+        name: 'Negative Stock',
+        barcode: '123',
+        price: 10,
+        cost: 5,
+        stock: -1,
+        category: 'Test',
+      ), throwsA(isA<AssertionError>()));
     });
   });
 }

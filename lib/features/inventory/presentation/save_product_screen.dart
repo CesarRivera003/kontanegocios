@@ -467,17 +467,31 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
                     Expanded(
                       child: TextFormField(
                         controller: _stockCtrl,
-                        keyboardType: TextInputType.number, 
+                        keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         decoration: const InputDecoration(labelText: 'Stock Actual', prefixIcon: Icon(Icons.warehouse), border: OutlineInputBorder()),
-                        validator: (v) => v!.isEmpty ? 'Requerido' : null,
+                        validator: (v) {
+                          if (v!.isEmpty) return 'Requerido';
+                          final val = int.tryParse(v);
+                          if (val == null || val < 0) return 'Inválido';
+                          return null;
+                        },
                       )
                     ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: TextFormField(
                         controller: _minStockCtrl,
-                        keyboardType: TextInputType.number,
+                        keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
                         decoration: const InputDecoration(labelText: 'Stock Mínimo', prefixIcon: Icon(Icons.notifications_active), border: OutlineInputBorder()),
+                        validator: (v) {
+                          if (v != null && v.isNotEmpty) {
+                            final val = int.tryParse(v);
+                            if (val == null || val < 0) return 'Inválido';
+                          }
+                          return null;
+                        },
                       )
                     ),
                   ],
@@ -574,10 +588,18 @@ class _SaveProductScreenState extends ConsumerState<SaveProductScreen> {
   Widget _buildMoneyField(String label, TextEditingController ctrl, IconData icon) {
     return TextFormField(
       controller: ctrl,
-      keyboardType: const TextInputType.numberWithOptions(decimal: true),
-      inputFormatters: [CurrencyInputFormatter()], 
+      keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: false),
+      inputFormatters: [
+        CurrencyInputFormatter(),
+        FilteringTextInputFormatter.allow(RegExp(r'^[0-9.,]+$')), // Prevent minus sign physically
+      ],
       decoration: InputDecoration(labelText: label, prefixIcon: Icon(icon), border: const OutlineInputBorder()),
-      validator: (val) => val!.isEmpty ? 'Requerido' : null,
+      validator: (val) {
+        if (val!.isEmpty) return 'Requerido';
+        final cleanVal = double.tryParse(val.replaceAll(',', '').replaceAll('.', ''));
+        if (cleanVal == null || cleanVal < 0) return 'Valor inválido';
+        return null;
+      },
       // Se eliminó la obligación de 'onChanged' aquí porque el listener en initState ya hace el trabajo
     );
   }

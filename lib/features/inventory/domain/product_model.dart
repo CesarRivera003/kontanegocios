@@ -36,34 +36,50 @@ class Product {
     this.taxType = 'EXCLUIDO', // Por defecto no genera impuesto desglosado
     this.minStock = 5,
     this.isService = false,
-  });
+  }) : assert(price >= 0, 'Price cannot be negative'),
+       assert(cost >= 0, 'Cost cannot be negative'),
+       assert(stock >= 0, 'Stock cannot be negative'),
+       assert(commissionPercentage >= 0, 'Commission cannot be negative'),
+       assert(taxRate >= 0, 'Tax rate cannot be negative'),
+       assert(minStock >= 0, 'Min stock cannot be negative');
+
+  static String _sanitizeString(String input) {
+    return input.replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  }
 
   factory Product.fromMap(Map<String, dynamic> map, String docId) {
+    double parsedPrice = (map['price'] ?? 0).toDouble();
+    double parsedCost = (map['cost'] ?? 0).toDouble();
+    int parsedStock = (map['stock'] ?? 0).toInt();
+    double parsedCommission = (map['commissionPercentage'] ?? 0).toDouble();
+    double parsedTaxRate = (map['taxRate'] ?? 0).toDouble();
+    int parsedMinStock = (map['minStock'] ?? 5).toInt();
+
     return Product(
       id: docId,
       name: map['name'] ?? '',
       barcode: map['barcode'] ?? '',
       description: map['description'] ?? '',
-      price: (map['price'] ?? 0).toDouble(),
-      cost: (map['cost'] ?? 0).toDouble(),
-      stock: (map['stock'] ?? 0).toInt(),
+      price: parsedPrice < 0 ? 0.0 : parsedPrice,
+      cost: parsedCost < 0 ? 0.0 : parsedCost,
+      stock: parsedStock < 0 ? 0 : parsedStock,
       category: map['category'] ?? 'General',
       unit: map['unit'] ?? 'Und',
       hasCommission: map['hasCommission'] ?? false,
-      commissionPercentage: (map['commissionPercentage'] ?? 0).toDouble(),
+      commissionPercentage: parsedCommission < 0 ? 0.0 : parsedCommission,
       imageUrl: map['imageUrl'],
-      taxRate: (map['taxRate'] ?? 0).toDouble(),
+      taxRate: parsedTaxRate < 0 ? 0.0 : parsedTaxRate,
       taxType: map['taxType'] ?? 'EXCLUIDO',
-      minStock: (map['minStock'] ?? 5).toInt(),
+      minStock: parsedMinStock < 0 ? 0 : parsedMinStock,
       isService: map['isService'] ?? false,
     );
   }
 
   Map<String, dynamic> toMap() {
     return {
-      'name': name,
+      'name': _sanitizeString(name),
       'barcode': barcode,
-      'description': description,
+      'description': _sanitizeString(description),
       'price': price,
       'cost': cost,
       'stock': stock,
