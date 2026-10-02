@@ -88,6 +88,85 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
               const SizedBox(height: 20),
 
+              // --- NUEVAS MÉTRICAS ESTRATÉGICAS ---
+              DashboardCard(
+                title: "Inteligencia de Negocio",
+                child: Column(
+                  children: [
+                    _InsightCard(
+                      icon: Icons.shopping_bag_outlined,
+                      title: "Ticket Promedio",
+                      value: CurrencyFormatter.format(stats.averageTicket),
+                      insight: "Tus clientes gastan en promedio ${CurrencyFormatter.format(stats.averageTicket)} por compra. Tip: Implementa combos o ventas sugeridas para elevar esta cifra.",
+                      color: Colors.purple,
+                    ),
+                    const SizedBox(height: 10),
+                    _InsightCard(
+                      icon: Icons.shopping_basket_outlined,
+                      title: "Tamaño de Cesta",
+                      value: "${stats.averageBasketSize.toStringAsFixed(1)} unds",
+                      insight: "Tus clientes llevan en promedio ${stats.averageBasketSize.toStringAsFixed(1)} unidades por compra.",
+                      color: Colors.blue,
+                    ),
+                    const SizedBox(height: 10),
+                    _InsightCard(
+                      icon: Icons.schedule_outlined,
+                      title: "Mapa de Oportunidad",
+                      value: "${stats.peakSalesDay} / ${stats.peakSalesHourRange}",
+                      insight: "Tu día más fuerte es ${stats.peakSalesDay} y tu hora pico es en la ${stats.peakSalesHourRange}. Tip: Refuerza el personal y el stock en estos momentos.",
+                      color: Colors.orange,
+                    ),
+                    const SizedBox(height: 10),
+                    _InsightCard(
+                      icon: Icons.inventory_2_outlined,
+                      title: "Dinero quieto en estantería",
+                      value: CurrencyFormatter.format(stats.immobilizedCapital),
+                      insight: "Tienes ${CurrencyFormatter.format(stats.immobilizedCapital)} inmovilizados en productos sin rotación.",
+                      color: Colors.redAccent,
+                    ),
+                  ],
+                ),
+              ),
+
+              // --- MATRIZ DE INVENTARIO ---
+              DashboardCard(
+                title: "Salud del Inventario",
+                subtitle: "Clasificación inteligente para toma de decisiones",
+                child: Column(
+                  children: [
+                    _InventoryQuadrant(
+                      title: "Estrellas ⭐",
+                      description: "Alta rotación y alto margen. ¡Nunca te quedes sin stock!",
+                      items: stats.inventoryMatrix.stars,
+                      color: Colors.green,
+                    ),
+                    const Divider(height: 20),
+                    _InventoryQuadrant(
+                      title: "Ganchos 🎯",
+                      description: "Atraen clientes. Acompáñalos con productos de mayor ganancia.",
+                      items: stats.inventoryMatrix.hooks,
+                      color: Colors.blue,
+                    ),
+                    const Divider(height: 20),
+                    _InventoryQuadrant(
+                      title: "Oportunidad 💎",
+                      description: "Tienen buen margen pero se venden poco. ¡Dales más visibilidad!",
+                      items: stats.inventoryMatrix.opportunities,
+                      color: Colors.purple,
+                    ),
+                    const Divider(height: 20),
+                    _InventoryQuadrant(
+                      title: "Estancados ⚠️",
+                      description: "Sin ventas en este periodo. Considera liquidarlos para recuperar dinero.",
+                      items: stats.inventoryMatrix.deadStock,
+                      color: Colors.red,
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 20),
+
               // --- SECCIÓN 2: ALERTAS (Solo si existen) ---
               if (stats.lowStockAlerts.isNotEmpty)
                 _AlertSection(alerts: stats.lowStockAlerts),
@@ -263,6 +342,107 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       },
     );
     if (picked != null) setState(() => _selectedRange = picked);
+  }
+}
+
+class _InsightCard extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String value;
+  final String insight;
+  final Color color;
+
+  const _InsightCard({
+    required this.icon,
+    required this.title,
+    required this.value,
+    required this.insight,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                    Text(value, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14, color: color)),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(insight, style: TextStyle(fontSize: 12, color: Colors.grey[700])),
+              ],
+            ),
+          )
+        ],
+      ),
+    );
+  }
+}
+
+class _InventoryQuadrant extends StatelessWidget {
+  final String title;
+  final String description;
+  final List<MatrixItem> items;
+  final Color color;
+
+  const _InventoryQuadrant({
+    required this.title,
+    required this.description,
+    required this.items,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(title, style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: color)),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+              child: Text("${items.length}", style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12)),
+            )
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(description, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+        const SizedBox(height: 8),
+        if (items.isEmpty)
+          const Text("No hay productos en este cuadrante.", style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic))
+        else
+          Wrap(
+            spacing: 6,
+            runSpacing: 6,
+            children: items.take(10).map((item) => Chip(
+              label: Text("${item.name} (${item.stock})", style: const TextStyle(fontSize: 11)),
+              backgroundColor: Colors.white,
+              side: BorderSide(color: Colors.grey.shade300),
+              visualDensity: VisualDensity.compact,
+            )).toList(),
+          ),
+      ],
+    );
   }
 }
 
@@ -557,28 +737,6 @@ class _RankingSection extends StatelessWidget {
   }
 }
 
-// FILA ESTADÍSTICA COMPACTA (Para bancos/categorías)
-class _StatRowCompact extends StatelessWidget {
-  final String label;
-  final String value;
-  final Color color;
-
-  const _StatRowCompact({required this.label, required this.value, this.color = Colors.black87});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(color: Colors.black54)),
-          Text(value, style: TextStyle(fontWeight: FontWeight.w600, color: color)),
-        ],
-      ),
-    );
-  }
-}
 
 // ==========================================
 // GRÁFICOS (MEJORADOS)

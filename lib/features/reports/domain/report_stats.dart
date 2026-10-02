@@ -17,6 +17,14 @@ class ReportStats {
   final List<UserStat> userStats; // Ventas y comisiones por usuario
   final List<ProductAlert> lowStockAlerts;
   
+  // Nuevas Métricas Estratégicas
+  final double averageTicket;
+  final double averageBasketSize;
+  final InventoryMatrix inventoryMatrix;
+  final double immobilizedCapital;
+  final String peakSalesDay;
+  final String peakSalesHourRange;
+
   // Gráfico Anual (Mes a Mes)
   final List<MonthlyStat> monthlyStats;
 
@@ -33,6 +41,41 @@ class ReportStats {
     required this.userStats,
     required this.lowStockAlerts,
     required this.monthlyStats,
+    this.averageTicket = 0.0,
+    this.averageBasketSize = 0.0,
+    required this.inventoryMatrix,
+    this.immobilizedCapital = 0.0,
+    this.peakSalesDay = '',
+    this.peakSalesHourRange = '',
+  });
+}
+
+// Nuevas clases para Inventario Inteligente
+class InventoryMatrix {
+  final List<MatrixItem> stars; // Alta rotación, alto margen
+  final List<MatrixItem> hooks; // Alta rotación, bajo margen
+  final List<MatrixItem> opportunities; // Baja rotación, alto margen
+  final List<MatrixItem> deadStock; // Cero rotación, con stock
+
+  InventoryMatrix({
+    required this.stars,
+    required this.hooks,
+    required this.opportunities,
+    required this.deadStock,
+  });
+}
+
+class MatrixItem {
+  final String name;
+  final int stock;
+  final double margin;
+  final double rotation;
+
+  MatrixItem({
+    required this.name,
+    required this.stock,
+    required this.margin,
+    required this.rotation,
   });
 }
 
