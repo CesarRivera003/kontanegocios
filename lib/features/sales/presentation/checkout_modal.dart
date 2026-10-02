@@ -145,6 +145,18 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
 
   // --- PROCESAR VENTA (CON INTEGRACIÓN A TESORERÍA CORREGIDA) ---
   Future<void> _processSale(List<BankAccount> accounts) async {
+    final cart = ref.read(cartProvider);
+
+    // 0. VALIDACIÓN DE CARRITO VACÍO Y NEGATIVO
+    if (cart.items.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ El carrito está vacío'), backgroundColor: Colors.red));
+      return;
+    }
+    if (_grandTotal < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('⚠️ El total no puede ser negativo'), backgroundColor: Colors.red));
+      return;
+    }
+
     // 1. VALIDACIÓN DE DINERO COMPLETO
     if (_remaining > 0) {
        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('⚠️ Faltan ${CurrencyFormatter.format(_remaining)}'), backgroundColor: Colors.red));
@@ -177,7 +189,6 @@ class _CheckoutModalState extends ConsumerState<CheckoutModal> {
         return; // Detenemos el proceso
     }
 
-    final cart = ref.read(cartProvider);
     Client? clienteParaFactura;
 
     // --- MAGIA PURA: AUDITORÍA DIAN EN TIEMPO REAL ---

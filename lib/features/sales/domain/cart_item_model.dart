@@ -9,7 +9,9 @@ class CartItem {
     required this.product, 
     required this.quantity,
     required double? price, 
-  }) : price = price ?? product.price;
+  }) : price = price ?? product.price,
+       assert(quantity > 0, 'Quantity must be greater than 0'),
+       assert((price ?? product.price) >= 0, 'Price cannot be negative');
 
   // El total bruto que paga el cliente por esta línea
   double get total => price * quantity; 
@@ -38,8 +40,8 @@ class CartItem {
   CartItem copyWith({int? quantity, double? price}) {
     return CartItem(
       product: product,
-      quantity: quantity ?? this.quantity,
-      price: price ?? this.price,
+      quantity: quantity != null && quantity > 0 ? quantity : this.quantity,
+      price: price != null && price >= 0 ? price : this.price,
     );
   }
 }
