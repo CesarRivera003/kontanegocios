@@ -36,12 +36,12 @@ class Product {
     this.taxType = 'EXCLUIDO', // Por defecto no genera impuesto desglosado
     this.minStock = 5,
     this.isService = false,
-  }) : assert(price >= 0, 'Precio no puede ser negativo'),
-       assert(cost >= 0, 'Costo no puede ser negativo'),
-       assert(stock >= 0, 'Stock no puede ser negativo'),
-       assert(commissionPercentage >= 0, 'Commision no puede ser negativo'),
-       assert(taxRate >= 0, 'Impuesto no puede ser negativo'),
-       assert(minStock >= 0, 'Stock minimo no puede ser negativo');
+  }) : assert(price >= 0, 'Price cannot be negative'),
+       assert(cost >= 0, 'Cost cannot be negative'),
+       assert(stock >= 0, 'Stock cannot be negative'),
+       assert(commissionPercentage >= 0, 'Commission cannot be negative'),
+       assert(taxRate >= 0, 'Tax rate cannot be negative'),
+       assert(minStock >= 0, 'Min stock cannot be negative');
 
   static String _sanitizeString(String input) {
     return input.replaceAll('<', '&lt;').replaceAll('>', '&gt;');

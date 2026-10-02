@@ -44,3 +44,36 @@
 * **Sanitización de Texto:** Implementar un middleware o utilizar una función utilitaria para eliminar caracteres HTML/JS como `<` y `>` antes de serializar `toMap()` en Firestore, previniendo posibles Cross-Site Scripting si se renderiza web no escapada en algún reporte HTML.
 * **Mejorar Validaciones UI:** Aunque `SaveProductScreen` intenta parsear a `double.tryParse()`, sería ideal añadir validadores a nivel de `TextFormField` que rechacen explícitamente valores negativos mediante `RegExp` o bloqueando el signo `-`.
 * **Corregir Widget Test Predeterminado:** Ya realizado, pero a futuro asegurarse de que si se modifica el `main.dart`, los smoke tests sigan siendo compatibles.
+
+---
+
+## Auditoría Módulo POS / Sales
+
+### Resumen de Cobertura y Resultados
+* **Total de Pruebas Diseñadas (POS/Sales):** 6 (4 automatizadas, 2 análisis estático)
+* **Pruebas Pasadas:** 1 (Cálculo de impuestos)
+* **Pruebas Fallidas:** 5 (Identifican vulnerabilidades de dominio)
+
+### Matriz Detallada de Pruebas (POS / Sales)
+
+| Módulo | Caso de Prueba | Tipo | Entrada (Payload) | Resultado Esperado | Resultado Real | Estado |
+|--------|----------------|------|-------------------|-------------------|----------------|--------|
+| POS | Cantidad negativa en carrito | Negativo | CartItem(quantity: -5) | Error de validación | El modelo lo permite, calculando `total` negativo | FAIL |
+| POS | Totales de venta negativos | Negativo | Sale(total: -50) | Error de validación | El modelo lo permite, generando saldos absurdos | FAIL |
+| POS | Montos de pago negativos | Negativo | PaymentMethodDetail(amount: -50) | Error de validación | El modelo lo permite | FAIL |
+| POS | Venta vacía | Negativo | Confirmar venta con 0 items | Deshabilitado en UI | En UI (`isCovered` verifica monto), pero el Provider no prohíbe `total == 0` | WARN |
+| POS | Prevención Doble Submit | Ideal | Doble tap rápido en "Registrar Venta" | Procesa solo uno | Evaluado: existe `_isProcessing = true` y validación `!_isProcessing` en el botón | PASS |
+| POS | Quiebre de stock | Negativo | Agregar > stock disponible | Bloquea o avisa | El UI Provider `addProduct` bloquea aumentar cantidad si >= stock | PASS |
+
+### Reporte de Fallos y Vulnerabilidades de Negocio (POS)
+
+| ID | Fallo / Comportamiento No Deseado | Archivo | Línea (Aprox) |
+|----|-----------------------------------|---------|---------------|
+| 4 | `PaymentMethodDetail` y `Sale` model permiten instanciar objetos con montos negativos (amount, total) sin arrojar excepción. | `lib/features/sales/domain/sale_model.dart` | 13, 56 |
+| 5 | `CartItem` model permite cantidades negativas o de cero, lo que puede causar totales de venta negativos o afectar el inventario. | `lib/features/sales/domain/cart_item_model.dart` | 7 |
+| 6 | No hay validación de carrito vacío explícita en el Provider antes de llamar a checkout, se confía enteramente en que la UI desactive el botón. | `lib/features/sales/presentation/checkout_modal.dart` | 147 |
+
+### Recomendaciones Técnicas (POS)
+1. **Blindar el Modelo de Ventas (`Sale` y `PaymentMethodDetail`):** Añadir aserciones (`assert(total >= 0)`) para garantizar integridad de datos en el nivel del constructor.
+2. **Restricción de `CartItem`:** Añadir aserción (`assert(quantity > 0)`) en el constructor y `copyWith`.
+3. **Bloqueos a Nivel Servidor/Repositorio:** `sales_repository.dart` debería verificar si la venta tiene un total `>= 0` y al menos `1` ítem antes de procesar un batch para evitar insertar registros corruptos en Firestore si la UI se vulnera.
