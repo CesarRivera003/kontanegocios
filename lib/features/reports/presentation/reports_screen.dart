@@ -426,7 +426,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       // 2. GANANCIA NETA REAL
       _buildCompactKpiCard(
         title: 'Ganancia Neta Real',
-        subtitle: 'Ingresos - costos y gastos',
+        subtitle: 'Ventas - costos y gastos',
         value: CurrencyFormatter.format(stats.totalProfit),
         badgeLabel: '${profitMargin.toStringAsFixed(1)}% Margen',
         badgePositive: stats.totalProfit >= 0,
@@ -475,18 +475,18 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
       // 4. CAPITAL EN BODEGA
       _buildCompactKpiCard(
-        title: 'Capital en Bodega',
-        subtitle: 'Stock estancado',
-        value: CurrencyFormatter.format(stats.immobilizedCapital),
-        badgeLabel: '${stats.inventoryMatrix.deadStock.length} sin rotación',
+        title: 'Valor Total en Bodega',
+        subtitle: 'Activo total en stock (a costo)',
+        value: CurrencyFormatter.format(stats.totalInventoryCost), // <-- Aquí va el TOTAL DE TODO
+        badgeLabel: '${stats.inventoryMatrix.deadStock.length} SKUs quietos',
         badgePositive: stats.immobilizedCapital == 0,
         accentColor: const Color(0xFFF43F5E),
         footerLeading: Row(
           children: [
-            const Icon(Icons.inventory_2_outlined, size: 11, color: Color(0xFFE11D48)),
+            const Icon(Icons.warning_amber_rounded, size: 11, color: Color(0xFFE11D48)),
             const SizedBox(width: 3),
             Text(
-              '${stats.inventoryMatrix.deadStock.length} SKUs inactivos',
+              '${CurrencyFormatter.format(stats.immobilizedCapital)} inmovilizado', // <-- Aquí va el ESTANCADO
               style: const TextStyle(fontSize: 10, color: Color(0xFFBE123C), fontWeight: FontWeight.w500),
             ),
           ],
@@ -1325,18 +1325,28 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(emoji, style: const TextStyle(fontSize: 15)),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.85),
-                  borderRadius: BorderRadius.circular(4),
+              InkWell(
+                onTap: items.isNotEmpty
+                    ? () => _showMatrixDetailsModal(title, emoji, items, textColor, valueType)
+                    : null,
+                borderRadius: BorderRadius.circular(4),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.85),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    '${items.length} items',
+                    style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: textColor),
+                  ),
                 ),
-                child: Text('${items.length} items', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: textColor)),
               ),
             ],
           ),
@@ -1345,7 +1355,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           Text(subtitle, style: TextStyle(fontSize: 9, color: textColor.withOpacity(0.8), fontWeight: FontWeight.w500)),
           const SizedBox(height: 8),
 
-          // LISTADO DE PRODUCTOS REALES
+          // LISTADO DE PRODUCTOS (Primeros 3 en pantalla)
           if (items.isEmpty)
             Padding(
               padding: const EdgeInsets.symmetric(vertical: 8),
@@ -1356,14 +1366,11 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
             )
           else ...[
             ...items.take(3).map((item) {
-              final String detail;
-              if (valueType == 'stock') {
-                detail = '${item.stock} und';
-              } else if (valueType == 'rotation') {
-                detail = '${item.rotation.toInt()} vtas';
-              } else {
-                detail = '${item.margin.toStringAsFixed(0)}% mg';
-              }
+              final String detail = valueType == 'stock'
+                  ? '${item.stock} und'
+                  : valueType == 'rotation'
+                      ? '${item.rotation.toInt()} vtas'
+                      : '${item.margin.toStringAsFixed(1)}% margen';
 
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
@@ -1387,11 +1394,19 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               );
             }),
             if (items.length > 3)
-              Padding(
-                padding: const EdgeInsets.only(top: 2),
-                child: Text(
-                  '+ ${items.length - 3} más...',
-                  style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: textColor.withOpacity(0.7)),
+              InkWell(
+                onTap: () => _showMatrixDetailsModal(title, emoji, items, textColor, valueType),
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 4.0),
+                  child: Text(
+                    'Ver todos (${items.length})...',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: textColor,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
                 ),
               ),
           ],
@@ -1412,6 +1427,137 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           ),
         ],
       ),
+    );
+  }
+
+  void _showMatrixDetailsModal(
+    String title,
+    String emoji,
+    List<MatrixItem> items,
+    Color accentColor,
+    String valueType,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.6,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (_, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFCBD5E1),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Text(emoji, style: const TextStyle(fontSize: 20)),
+                          const SizedBox(width: 8),
+                          Text(
+                            title,
+                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A)),
+                          ),
+                        ],
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${items.length} productos',
+                          style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: accentColor),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'Listado ordenado por impacto y métrica de rotación.',
+                    style: TextStyle(fontSize: 12, color: Color(0xFF64748B)),
+                  ),
+                  const Divider(height: 24),
+                  Expanded(
+                    child: ListView.separated(
+                      controller: scrollController,
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFF1F5F9)),
+                      itemBuilder: (_, index) {
+                        final item = items[index];
+                        final String detail = valueType == 'stock'
+                            ? '${item.stock} unds disponibles'
+                            : valueType == 'rotation'
+                                ? '${item.rotation.toInt()} unds vendidas'
+                                : '${item.margin.toStringAsFixed(1)}% margen neto';
+
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    '${index + 1}.',
+                                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Color(0xFF94A3B8), fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 220),
+                                    child: Text(
+                                      item.name,
+                                      style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B)),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF8FAFC),
+                                  borderRadius: BorderRadius.circular(6),
+                                  border: Border.all(color: const Color(0xFFE2E8F0)),
+                                ),
+                                child: Text(
+                                  detail,
+                                  style: TextStyle(fontFamily: 'monospace', fontSize: 11, fontWeight: FontWeight.bold, color: accentColor),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -1530,13 +1676,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   // =========================================================================
-  // SECCIÓN 5: RANKINGS Y RENDIMIENTO OPERATIVO (ESTILO MAQUETA)
+  // SECCIÓN 5: RANKINGS Y RENDIMIENTO OPERATIVO (INCLUYE TOP CLIENTES)
   // =========================================================================
   Widget _buildOperationalRankingsSection(ReportStats stats) {
     return LayoutBuilder(builder: (context, constraints) {
-      final isWide = constraints.maxWidth > 900;
+      final isWide = constraints.maxWidth > 950;
 
-      // Card de Top Líderes con barras de progreso delgadas
+      // Card de Top Líderes: Facturación, Rotación y Clientes VIP
       final leadersCard = Container(
         padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
@@ -1548,37 +1694,89 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Top 5 Productos Líderes', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0F172A))),
-                Text('Últimos 30D', style: TextStyle(fontSize: 10, fontFamily: 'monospace', color: Color(0xFF4F46E5))),
+                const Flexible(
+                  child: Text(
+                    'Líderes Comerciales & Clientes',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0F172A)),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEEF2FF),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Text('Top 5', style: TextStyle(fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.bold, color: Color(0xFF4F46E5))),
+                ),
               ],
             ),
-            const Text('Facturación monetaria vs. unidades despachadas', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            const SizedBox(height: 2),
+            const Text(
+              'Rendimiento de productos y clientes con mayor aporte al flujo de caja',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B), height: 1.25),
+              softWrap: true,
+            ),
             const SizedBox(height: 20),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: _buildProgressRankingColumn(
-                    title: 'MAYOR FACTURACIÓN',
-                    items: stats.topProductsByRevenue.take(5).toList(),
-                    isCurrency: true,
-                    accentColor: const Color(0xFF10B981),
+            
+            // Fila de rankings responsiva
+            LayoutBuilder(builder: (context, rankConstraints) {
+              final isMiniRank = rankConstraints.maxWidth < 600;
+
+              final revenueRanking = _buildProgressRankingColumn(
+                title: 'PRODUCTOS FACTURACIÓN',
+                items: stats.topProductsByRevenue.take(5).toList(),
+                isCurrency: true,
+                accentColor: const Color(0xFF10B981),
+              );
+
+              final qtyRanking = _buildProgressRankingColumn(
+                title: 'PRODUCTOS ROTACIÓN (VOL)',
+                items: stats.topProductsByQty.take(5).toList(),
+                isCurrency: false,
+                accentColor: const Color(0xFF4F46E5),
+              );
+
+              final clientsRanking = _buildProgressRankingColumn(
+                title: 'MEJORES CLIENTES (VIP)',
+                items: stats.topClients.take(5).toList(),
+                isCurrency: true,
+                accentColor: const Color(0xFFF59E0B), // Tono ámbar/dorado para clientes VIP
+              );
+
+              if (isMiniRank) {
+                return Column(
+                  children: [
+                    revenueRanking,
+                    const SizedBox(height: 16),
+                    qtyRanking,
+                    const SizedBox(height: 16),
+                    clientsRanking,
+                  ],
+                );
+              }
+
+              // En pantallas medianas o anchas mostramos las 2 de productos arriba y los clientes destacados abajo, o 3 columnas si hay espacio
+              return Column(
+                children: [
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: revenueRanking),
+                      const SizedBox(width: 16),
+                      Expanded(child: qtyRanking),
+                    ],
                   ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _buildProgressRankingColumn(
-                    title: 'MAYOR ROTACIÓN (VOL)',
-                    items: stats.topProductsByQty.take(5).toList(),
-                    isCurrency: false,
-                    accentColor: const Color(0xFF4F46E5),
-                  ),
-                ),
-              ],
-            ),
+                  const SizedBox(height: 20),
+                  const Divider(color: Color(0xFFF1F5F9), height: 1),
+                  const SizedBox(height: 16),
+                  clientsRanking,
+                ],
+              );
+            }),
           ],
         ),
       );
@@ -1598,7 +1796,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Text('Rendimiento del Equipo & Gastos', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0F172A))),
+                const Flexible(
+                  child: Text(
+                    'Rendimiento del Equipo & Gastos',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF0F172A)),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                   decoration: BoxDecoration(color: const Color(0xFFECFDF5), borderRadius: BorderRadius.circular(10)),
@@ -1606,9 +1810,15 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
                 ),
               ],
             ),
-            const Text('Control de ventas por usuario y gastos por categoría', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+            const SizedBox(height: 2),
+            const Text(
+              'Control de ventas por usuario y gastos por categoría',
+              style: TextStyle(fontSize: 11, color: Color(0xFF64748B), height: 1.25),
+              softWrap: true,
+            ),
             const SizedBox(height: 16),
-            // Tabla de Asesores
+            
+            // Tabla de Asesores con scroll horizontal seguro
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: DataTable(
@@ -1657,9 +1867,10 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               ),
             ),
             const SizedBox(height: 20),
+            
             // Donut de Gastos Operativos
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
                 color: const Color(0xFFF8FAFC),
                 borderRadius: BorderRadius.circular(12),
@@ -1668,16 +1879,34 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  Wrap(
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
                     children: [
-                      const Text('DISTRIBUCIÓN DE GASTOS', style: TextStyle(fontFamily: 'monospace', fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
-                      Text(CurrencyFormatter.format(stats.totalExpenses), style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF0F172A))),
+                      const Text(
+                        'DISTRIBUCIÓN DE GASTOS',
+                        style: TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                      Text(
+                        'Total: ${CurrencyFormatter.format(stats.totalExpenses)}',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF0F172A),
+                        ),
+                      ),
                     ],
                   ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   SizedBox(
-                    height: 140,
+                    height: 180,
                     child: ModernDonutChart(data: stats.expensesByCategory),
                   ),
                 ],
@@ -1779,49 +2008,84 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
     String? badge,
   }) {
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            Container(
-              width: 32,
-              height: 32,
-              decoration: BoxDecoration(
-                color: const Color(0xFFEEF2FF),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFC7D2FE)),
-              ),
-              child: Icon(icon, color: const Color(0xFF4F46E5), size: 18),
-            ),
-            const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF0F172A), letterSpacing: -0.3),
-                ),
-                Text(subtitle, style: const TextStyle(fontSize: 11, color: Color(0xFF64748B))),
-              ],
-            ),
-          ],
-        ),
-        if (badge != null)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-            decoration: BoxDecoration(
-              color: const Color(0xFFECFDF5),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: const Color(0xFFA7F3D0)),
-            ),
-            child: Row(
-              children: [
-                Container(width: 6, height: 6, decoration: const BoxDecoration(color: Color(0xFF10B981), shape: BoxShape.circle)),
-                const SizedBox(width: 6),
-                Text(badge, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Color(0xFF047857))),
-              ],
-            ),
+        Container(
+          width: 32,
+          height: 32,
+          margin: const EdgeInsets.only(top: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFFEEF2FF),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: const Color(0xFFC7D2FE)),
           ),
+          child: Icon(icon, color: const Color(0xFF4F46E5), size: 18),
+        ),
+        const SizedBox(width: 10),
+        // Expanded evita desbordamientos en móviles
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Flexible(
+                    child: Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF0F172A),
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                  ),
+                  if (badge != null) ...[
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFECFDF5),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: const Color(0xFFA7F3D0)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 5,
+                            height: 5,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFF10B981),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            badge,
+                            style: const TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF047857),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 2),
+              // Subtítulo con ajuste de líneas automático
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 11, color: Color(0xFF64748B), height: 1.25),
+                softWrap: true,
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }

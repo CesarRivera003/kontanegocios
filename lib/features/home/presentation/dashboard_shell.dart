@@ -86,16 +86,16 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
     // 4. DEFINIMOS LOS MENÚS
     final List<_MenuEntry> allEntries = [
       _MenuEntry(icon: Icons.storefront, label: 'Inicio', route: '/dashboard', isVisible: showHome),
-      _MenuEntry(icon: Icons.point_of_sale_outlined, selectedIcon: Icons.point_of_sale, label: 'Ventas', route: '/pos'),
-      _MenuEntry(icon: Icons.account_balance_wallet_outlined, selectedIcon: Icons.account_balance_wallet, label: 'Caja', route: '/cash'),
-      _MenuEntry(icon: Icons.history_outlined, selectedIcon: Icons.history, label: 'Historial', route: '/history'),
-      _MenuEntry(icon: Icons.attach_money_outlined, label: 'Gastos', route: '/expenses', isVisible: showExpenses),
+      _MenuEntry(icon: Icons.point_of_sale_outlined, selectedIcon: Icons.point_of_sale, label: 'Caja', route: '/pos'),
+      _MenuEntry(icon: Icons.account_balance_wallet_outlined, selectedIcon: Icons.account_balance_wallet, label: 'Cuadre de Efectivo', route: '/cash'),
+      _MenuEntry(icon: Icons.history_outlined, selectedIcon: Icons.history, label: 'Historial Ventas', route: '/history'),
+      _MenuEntry(icon: Icons.attach_money_outlined, label: 'Costos y Gastos', route: '/expenses', isVisible: showExpenses),
       _MenuEntry(icon: Icons.inventory_2_outlined, selectedIcon: Icons.inventory_2, label: 'Inventario', route: '/inventory'),
       _MenuEntry(icon: Icons.people_outline, label: 'Contactos', route: '/clients'),
       _MenuEntry(icon: Icons.web_outlined, selectedIcon: Icons.web, label: 'Catálogos', route: '/catalogs', isVisible: showHome),
       _MenuEntry(icon: Icons.account_balance_outlined, selectedIcon: Icons.account_balance, label: 'Tesorería', route: '/finance', isVisible: userProfile.role == UserRole.admin),
       _MenuEntry(icon: Icons.bar_chart_outlined, selectedIcon: Icons.bar_chart, label: 'Reportes', route: '/reports', isVisible: showReports),
-      _MenuEntry(icon: Icons.settings_outlined, selectedIcon: Icons.settings, label: 'Config', route: '/settings', isVisible: true),
+      _MenuEntry(icon: Icons.settings_outlined, selectedIcon: Icons.settings, label: 'Configuración', route: '/settings', isVisible: true),
     ];
 
     final visibleDestinations = allEntries.where((e) => e.isVisible).toList();

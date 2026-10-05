@@ -21,6 +21,7 @@ class ReportStats {
   final double averageTicket;
   final double averageBasketSize;
   final InventoryMatrix inventoryMatrix;
+  final double totalInventoryCost;
   final double immobilizedCapital;
   final String peakSalesDay;
   final String peakSalesHourRange;
@@ -44,6 +45,7 @@ class ReportStats {
     this.averageTicket = 0.0,
     this.averageBasketSize = 0.0,
     required this.inventoryMatrix,
+    this.totalInventoryCost = 0.0,
     this.immobilizedCapital = 0.0,
     this.peakSalesDay = '',
     this.peakSalesHourRange = '',

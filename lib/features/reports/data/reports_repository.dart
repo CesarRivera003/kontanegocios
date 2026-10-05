@@ -135,24 +135,38 @@ class ReportsRepository {
       averageBasketSize = totalUnitsSold / sales.length;
     }
 
-    // 2. Matriz de Inventario Inteligente y Capital Inmovilizado
+    // 2. Matriz de Inventario Inteligente y Capital en Bodega
     final stars = <MatrixItem>[];
     final hooks = <MatrixItem>[];
     final opportunities = <MatrixItem>[];
     final deadStock = <MatrixItem>[];
+    
     double immobilizedCapital = 0.0;
+    double totalInventoryCost = 0.0;
 
-    // Calculamos los promedios para definir los cuadrantes
     double avgRotation = 0.0;
     double avgMargin = 0.0;
     int productsWithSales = 0;
 
+    // PASO 1: Sumar total de bodega y calcular promedios de los que sí rotaron
     for (var p in products) {
       if (p.isService) continue;
-      final rotation = productQtyMap[p.name] ?? 0.0;
+
+      // Suma de todo el valor del inventario real en bodega a precio de costo
+      if (p.stock > 0 && p.cost > 0) {
+        totalInventoryCost += (p.stock * p.cost);
+      }
+
+      // Buscamos rotación por nombre o aseguramos comparación limpia
+      final rotation = productQtyMap[p.name] ?? 
+                       productQtyMap[p.name.trim()] ?? 
+                       0.0;
+
+      final marginPercent = p.price > 0 ? ((p.price - p.cost) / p.price) * 100 : 0.0;
+
       if (rotation > 0) {
         avgRotation += rotation;
-        avgMargin += (p.price - p.cost);
+        avgMargin += marginPercent;
         productsWithSales++;
       }
     }
@@ -162,25 +176,40 @@ class ReportsRepository {
       avgMargin /= productsWithSales;
     }
 
+    // PASO 2: Clasificar a cada producto en su cuadrante correspondiente
     for (var p in products) {
       if (p.isService) continue;
 
-      final rotation = productQtyMap[p.name] ?? 0.0;
-      final margin = p.price - p.cost;
+      final rotation = productQtyMap[p.name] ?? 
+                       productQtyMap[p.name.trim()] ?? 
+                       0.0;
 
+      final marginPercent = p.price > 0 ? ((p.price - p.cost) / p.price) * 100 : 0.0;
+
+      // SOLO es inmovilizado si tiene stock disponible pero 0 ventas en el período
       if (rotation == 0 && p.stock > 0) {
-        deadStock.add(MatrixItem(name: p.name, stock: p.stock, margin: margin, rotation: rotation));
+        deadStock.add(MatrixItem(
+          name: p.name,
+          stock: p.stock,
+          margin: marginPercent,
+          rotation: rotation,
+        ));
         immobilizedCapital += (p.stock * p.cost);
       } else if (rotation > 0) {
-        final item = MatrixItem(name: p.name, stock: p.stock, margin: margin, rotation: rotation);
-        if (rotation >= avgRotation && margin >= avgMargin) {
+        final item = MatrixItem(
+          name: p.name,
+          stock: p.stock,
+          margin: marginPercent,
+          rotation: rotation,
+        );
+
+        if (rotation >= avgRotation && marginPercent >= avgMargin) {
           stars.add(item);
-        } else if (rotation >= avgRotation && margin < avgMargin) {
+        } else if (rotation >= avgRotation && marginPercent < avgMargin) {
           hooks.add(item);
-        } else if (rotation < avgRotation && margin >= avgMargin) {
+        } else if (rotation < avgRotation && marginPercent >= avgMargin) {
           opportunities.add(item);
         } else {
-          // Si tiene baja rotación y bajo margen, lo mandamos a oportunidad por ahora
           opportunities.add(item);
         }
       }
@@ -229,6 +258,12 @@ class ReportsRepository {
     }
     final monthlyStatsList = monthlyData.values.toList()..sort((a,b) => _getMonthIndex(a.month).compareTo(_getMonthIndex(b.month)));
 
+    // Ordenamiento estratégico de cada cuadrante
+    stars.sort((a, b) => b.margin.compareTo(a.margin));
+    opportunities.sort((a, b) => b.margin.compareTo(a.margin));
+    hooks.sort((a, b) => b.rotation.compareTo(a.rotation));
+    deadStock.sort((a, b) => b.stock.compareTo(a.stock));
+    
     return ReportStats(
       totalIncome: totalIncome,
       totalExpenses: totalExpenses,
@@ -250,6 +285,7 @@ class ReportsRepository {
         opportunities: opportunities,
         deadStock: deadStock,
       ),
+      totalInventoryCost: totalInventoryCost,
       immobilizedCapital: immobilizedCapital,
       peakSalesDay: peakSalesDay,
       peakSalesHourRange: peakSalesHourRange,

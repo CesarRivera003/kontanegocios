@@ -101,7 +101,7 @@ class ReportPdfGenerator {
           pw.SizedBox(height: 25),
 
           // 5. GASTOS
-          _buildSectionHeader("Control de Gastos"),
+          _buildSectionHeader("Control de Costos y Gastos"),
           pw.SizedBox(height: 10),
           
           pw.Table.fromTextArray(
