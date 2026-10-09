@@ -52,7 +52,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> with SingleTick
           icon: const Icon(Icons.menu),
           onPressed: () => DashboardShell.scaffoldKey.currentState?.openDrawer(),
         ): null,
-        title: const Text('Control de Gastos'),
+        title: const Text('Control de Costos y Gastos'),
         bottom: TabBar(
           controller: _tabController,
           indicatorColor: Colors.red,
@@ -69,7 +69,7 @@ class _ExpensesScreenState extends ConsumerState<ExpensesScreen> with SingleTick
         backgroundColor: Colors.red[700],
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),
-        label: const Text('Nuevo Gasto'),
+        label: const Text('Nuevo'),
       ),
       body: TabBarView(
         controller: _tabController,

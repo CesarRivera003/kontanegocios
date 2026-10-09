@@ -7,6 +7,7 @@ import 'firebase_options.dart';
 import 'package:konta_gestor/core/router/app_router.dart';
 import 'package:konta_gestor/core/theme/app_theme.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
+import 'package:intl/date_symbol_data_local.dart';
 
 import 'package:purchases_flutter/purchases_flutter.dart';
 import 'package:flutter/foundation.dart';
@@ -25,6 +26,10 @@ Future<void> main() async {
     appRunner: () async {
       // ESTA LÍNEA DEBE SER LA PRIMERA DENTRO DEL APPRUNNER (Soluciona el Zone mismatch)
       WidgetsFlutterBinding.ensureInitialized();
+
+      // INICIALIZAMOS LOS DATOS DE LOCALE PARA DATEFORMAT
+      await initializeDateFormatting('es', null);
+      await initializeDateFormatting('es_CO', null);
 
       // ACTIVAMOS RUTAS LIMPIAS (Sin el #) AQUÍ
       usePathUrlStrategy(); 

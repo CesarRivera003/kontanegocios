@@ -239,7 +239,7 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
     final categoriesAsync = ref.watch(expenseCategoriesProvider);
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.expenseToEdit != null ? 'Editar Gasto' : 'Nuevo Gasto')),
+      appBar: AppBar(title: Text(widget.expenseToEdit != null ? 'Editar' : 'Nuevo')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Form(
