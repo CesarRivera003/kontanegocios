@@ -9,14 +9,17 @@ class CompanyProfile {
   final String? imageBase64;
 
   // --- NUEVOS CAMPOS: SUSCRIPCIÓN Y REFERIDOS ---
-  final String referralCode;       // Su propio código para invitar (ej: KNT-A8X9)
-  final String? referredBy;        // El código de quien lo invitó (para evitar auto-invitaciones)
-  final int referralCount;         // Cuentas gratis creadas con su código
-  final int paidReferralCount;     // Cuentas que han pagado con su código
-  final DateTime? trialEndsAt;     // Fecha en que expira su prueba o mes regalado
-  final String subscriptionStatus; // 'trial', 'freemium', 'pro', 'empresarial', 'expired', 'lifetime'
-  final double currentMonthSales;  // Acumulado de ventas del mes
-  final String currentMonth;       // Mes actual (Ej: "2026-03")
+  final String referralCode; // Su propio código para invitar (ej: KNT-A8X9)
+  final String?
+  referredBy; // El código de quien lo invitó (para evitar auto-invitaciones)
+  final int referralCount; // Cuentas gratis creadas con su código
+  final int paidReferralCount; // Cuentas que han pagado con su código
+  final DateTime? trialEndsAt; // Fecha en que expira su prueba o mes regalado
+  final String
+  subscriptionStatus; // 'trial', 'freemium', 'pro', 'empresarial', 'expired', 'lifetime'
+  final double currentMonthSales; // Acumulado de ventas del mes
+  final String currentMonth; // Mes actual (Ej: "2026-03")
+  final bool hasCompletedSetup; // Flag para saber si ya completó el onboarding
 
   CompanyProfile({
     this.id = '',
@@ -27,7 +30,7 @@ class CompanyProfile {
     this.email = '',
     this.slogan = '',
     this.imageBase64,
-    
+
     // Inicializamos los nuevos campos
     this.referralCode = '',
     this.referredBy,
@@ -37,17 +40,18 @@ class CompanyProfile {
     this.subscriptionStatus = 'trial', // Por defecto todos inician en prueba
     this.currentMonthSales = 0.0,
     this.currentMonth = '',
+    this.hasCompletedSetup = false,
   });
 
   // Convertir de Firestore (Map) a Objeto Dart
   factory CompanyProfile.fromMap(Map<String, dynamic>? map, String docId) {
     if (map == null) return CompanyProfile(id: docId);
-    
+
     // Manejo seguro de la fecha de Firestore a Dart
     DateTime? trialDate;
     if (map['trialEndsAt'] != null) {
       // Dependiendo de si es un Timestamp de Firebase o un String
-      trialDate = map['trialEndsAt'].toDate(); 
+      trialDate = map['trialEndsAt'].toDate();
     }
 
     return CompanyProfile(
@@ -59,7 +63,7 @@ class CompanyProfile {
       email: map['email'] ?? '',
       slogan: map['slogan'] ?? '',
       imageBase64: map['imageBase64'],
-      
+
       referralCode: map['referralCode'] ?? '',
       referredBy: map['referredBy'],
       referralCount: map['referralCount'] ?? 0,
@@ -68,6 +72,7 @@ class CompanyProfile {
       subscriptionStatus: map['subscriptionStatus'] ?? 'trial',
       currentMonthSales: (map['currentMonthSales'] as num?)?.toDouble() ?? 0.0,
       currentMonth: map['currentMonth'] ?? '',
+      hasCompletedSetup: map['hasCompletedSetup'] ?? false,
     );
   }
 
@@ -81,7 +86,7 @@ class CompanyProfile {
       'email': email,
       'slogan': slogan,
       'imageBase64': imageBase64,
-      
+
       'referralCode': referralCode,
       'referredBy': referredBy,
       'referralCount': referralCount,
@@ -90,9 +95,10 @@ class CompanyProfile {
       'subscriptionStatus': subscriptionStatus,
       'currentMonthSales': currentMonthSales,
       'currentMonth': currentMonth,
+      'hasCompletedSetup': hasCompletedSetup,
     };
   }
-  
+
   // Helper para copiar el objeto con nuevos valores
   CompanyProfile copyWith({
     String? name,
@@ -102,13 +108,14 @@ class CompanyProfile {
     String? email,
     String? slogan,
     String? imageBase64,
-    
+
     String? referralCode,
     String? referredBy,
     int? referralCount,
     int? paidReferralCount,
     DateTime? trialEndsAt,
     String? subscriptionStatus,
+    bool? hasCompletedSetup,
   }) {
     return CompanyProfile(
       id: this.id,
@@ -119,13 +126,14 @@ class CompanyProfile {
       email: email ?? this.email,
       slogan: slogan ?? this.slogan,
       imageBase64: imageBase64 ?? this.imageBase64,
-      
+
       referralCode: referralCode ?? this.referralCode,
       referredBy: referredBy ?? this.referredBy,
       referralCount: referralCount ?? this.referralCount,
       paidReferralCount: paidReferralCount ?? this.paidReferralCount,
       trialEndsAt: trialEndsAt ?? this.trialEndsAt,
       subscriptionStatus: subscriptionStatus ?? this.subscriptionStatus,
+      hasCompletedSetup: hasCompletedSetup ?? this.hasCompletedSetup,
     );
   }
 }
