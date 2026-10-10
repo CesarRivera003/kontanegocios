@@ -8,8 +8,12 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'package:image_picker/image_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../../../core/utils/currency_formatter.dart';
+import '../../../shared/services/image_service.dart';
 import '../../../shared/widgets/custom_text_field.dart';
 import '../../settings/data/settings_repository.dart';
 import '../../finance/data/finance_repository.dart';
@@ -34,18 +38,24 @@ class ProductDraftRow {
   final TextEditingController priceCtrl = TextEditingController();
   final TextEditingController costCtrl = TextEditingController();
   final TextEditingController stockCtrl = TextEditingController();
+  final TextEditingController minStockCtrl = TextEditingController();
+  final TextEditingController barcodeCtrl = TextEditingController();
+  final TextEditingController descriptionCtrl = TextEditingController();
   final TextEditingController categoryCtrl = TextEditingController(
     text: 'General',
   );
 
   bool isService = false;
-  String? imageBase64;
+  XFile? imageFile;
 
   void dispose() {
     nameCtrl.dispose();
     priceCtrl.dispose();
     costCtrl.dispose();
     stockCtrl.dispose();
+    minStockCtrl.dispose();
+    barcodeCtrl.dispose();
+    descriptionCtrl.dispose();
     categoryCtrl.dispose();
   }
 }
@@ -72,15 +82,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   // Cuenta principal (Caja General) se maneja por separado para facilitar su edición inicial
   final _mainAccountBalanceCtrl = TextEditingController(text: '0');
 
-  List<BankAccount> _tempAccounts = [
-    BankAccount(
-      id: 'default_cash',
-      name: 'Caja General',
-      balance: 0.0,
-      isCash: true,
-      isDefault: true,
-    ),
-  ];
+  List<BankAccount> _tempAccounts = [];
+  BankAccount? _existingMainAccount;
+  bool _isLoadingMainAccount = true;
   bool _isCashAccount = true;
 
   // Paso 3: Inventario manual
@@ -93,9 +97,53 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   @override
   void initState() {
     super.initState();
+    _loadMainAccount();
     // Iniciar con 2 filas
     _productDrafts.add(ProductDraftRow());
     _productDrafts.add(ProductDraftRow());
+  }
+
+  Future<void> _loadMainAccount() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final userId = ref.read(companyIdProvider).value;
+      if (userId != null) {
+        final financeRepo = FinanceRepository(
+          FirebaseFirestore.instance,
+          userId,
+        );
+        final accounts = await financeRepo.getAccounts().first;
+
+        final mainAcc = accounts.firstWhere(
+          (acc) => acc.isDefault && acc.isCash,
+          orElse: () => accounts.firstWhere(
+            (acc) => acc.name.toLowerCase().contains('caja'),
+            orElse: () => BankAccount(
+              id: '',
+              name: 'Caja General',
+              balance: 0,
+              isCash: true,
+              isDefault: true,
+            ),
+          ),
+        );
+
+        if (mounted) {
+          setState(() {
+            _existingMainAccount = mainAcc;
+            if (mainAcc.id.isNotEmpty) {
+              _mainAccountBalanceCtrl.text = mainAcc.balance.toInt().toString();
+            }
+            _isLoadingMainAccount = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _isLoadingMainAccount = false;
+          });
+        }
+      }
+    });
   }
 
   @override
@@ -263,54 +311,48 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Future<void> _saveAccountStep() async {
-    // Actualizar el balance de la cuenta principal antes de guardar
-    String mainBalanceText = _mainAccountBalanceCtrl.text.replaceAll(
-      RegExp(r'[^0-9]'),
-      '',
-    );
-    double mainInitialBalance = double.tryParse(mainBalanceText) ?? 0.0;
-
-    // Asumimos que la primera cuenta es siempre Caja General
-    if (_tempAccounts.isNotEmpty) {
-      _tempAccounts[0] = BankAccount(
-        id: _tempAccounts[0].id,
-        name: _tempAccounts[0].name,
-        balance: mainInitialBalance,
-        isCash: _tempAccounts[0].isCash,
-        isDefault: _tempAccounts[0].isDefault,
-      );
-    }
-
     final notifier = ref.read(setupWizardProvider.notifier);
     notifier.setLoading(true);
 
     try {
       final userId = ref.read(companyIdProvider).value;
-      if (userId != null && _tempAccounts.isNotEmpty) {
+      if (userId != null) {
         final financeRepo = FinanceRepository(
           FirebaseFirestore.instance,
           userId,
         );
 
-        // Verificar si ya existe una cuenta por defecto
-        final existingAccounts = await financeRepo.getAccounts().first;
-        bool hasDefaultCash = existingAccounts.any(
-          (acc) => acc.isDefault && acc.isCash,
-        );
+        // 1. Update Existing Main Account Balance (do NOT recreate it)
+        if (_existingMainAccount != null &&
+            _existingMainAccount!.id.isNotEmpty) {
+          String mainBalanceText = _mainAccountBalanceCtrl.text.replaceAll(
+            RegExp(r'[^0-9]'),
+            '',
+          );
+          double mainInitialBalance = double.tryParse(mainBalanceText) ?? 0.0;
 
-        for (var acc in _tempAccounts) {
-          // Si ya hay una cuenta por defecto en DB, no la forzamos a serlo
-          bool shouldBeDefault = acc.isDefault;
-          if (hasDefaultCash && shouldBeDefault) {
-            shouldBeDefault = false;
+          if (_existingMainAccount!.balance != mainInitialBalance) {
+            final updatedAccount = BankAccount(
+              id: _existingMainAccount!.id,
+              name: _existingMainAccount!.name,
+              balance: mainInitialBalance,
+              isCash: _existingMainAccount!.isCash,
+              isDefault: _existingMainAccount!.isDefault,
+              accountNumber: _existingMainAccount!.accountNumber,
+              isActive: _existingMainAccount!.isActive,
+            );
+            await financeRepo.updateAccount(updatedAccount);
           }
+        }
 
+        // 2. Add New Additional Accounts
+        for (var acc in _tempAccounts) {
           final accountToSave = BankAccount(
             id: '',
             name: acc.name,
             balance: acc.balance,
             isCash: acc.isCash,
-            isDefault: shouldBeDefault,
+            isDefault: false, // Ensure additional accounts are never default
           );
           await financeRepo.createAccount(accountToSave);
         }
@@ -343,6 +385,111 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       );
     } else {
       await _completeSetup();
+    }
+  }
+
+  Future<void> _downloadTemplate() async {
+    try {
+      var excel = Excel.createExcel();
+      Sheet sheetObject = excel['Plantilla_Inventario'];
+
+      if (excel.tables.containsKey('Sheet1')) {
+        excel.delete('Sheet1');
+      }
+
+      // Encabezados exactos que usa la importación
+      List<String> headers = [
+        'Nombre del Producto',
+        'Código de Barras',
+        'Precio de Venta',
+        'Costo Unitario',
+        'Stock Actual',
+        'Categoría',
+        'Stock Mínimo',
+        'Tipo de Impuesto (IVA/INC/EXENTO/EXCLUIDO)',
+        'Tarifa Impuesto % (Ej: 19 o 0)',
+      ];
+
+      sheetObject.appendRow(headers.map((h) => TextCellValue(h)).toList());
+
+      List<List<dynamic>> examples = [
+        [
+          'Empanada de Carne',
+          '123456789',
+          '2500',
+          '1000',
+          '50',
+          'Alimentos',
+          '10',
+          'EXCLUIDO',
+          '0',
+        ],
+        [
+          'Gaseosa 1.5L',
+          '987654321',
+          '6000',
+          '4000',
+          '24',
+          'Bebidas',
+          '12',
+          'IVA',
+          '19',
+        ],
+        [
+          'Hamburguesa',
+          '',
+          '15000',
+          '8000',
+          '0',
+          'Comidas Rápidas',
+          '0',
+          'INC',
+          '8',
+        ],
+        [
+          'Servicio de Domicilio',
+          '',
+          '5000',
+          '0',
+          '0',
+          'Servicios',
+          '0',
+          'EXENTO',
+          '0',
+        ],
+      ];
+
+      for (var row in examples) {
+        sheetObject.appendRow(
+          row.map((cell) => TextCellValue(cell.toString())).toList(),
+        );
+      }
+
+      final fileName = 'Plantilla_Inventario_Konta.xlsx';
+
+      if (kIsWeb) {
+        excel.save(fileName: fileName);
+      } else {
+        final directory = await getTemporaryDirectory();
+        final filePath = '${directory.path}/$fileName';
+        final file = File(filePath);
+
+        final fileBytes = excel.save();
+        if (fileBytes != null) {
+          await file.writeAsBytes(fileBytes);
+          await Share.shareXFiles(
+            [XFile(file.path)],
+            text:
+                'Aquí tienes la plantilla de Excel para importar tus productos a Konta Negocios.',
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al generar plantilla: $e')),
+        );
+      }
     }
   }
 
@@ -561,10 +708,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         centerTitle: true,
         automaticallyImplyLeading: false,
         actions: [
-          TextButton(
-            onPressed: () => context.pop(),
-            child: const Text('Omitir por ahora'),
-          ),
+          TextButton(onPressed: _skipStep, child: const Text('Omitir')),
         ],
       ),
       body: Column(
@@ -963,14 +1107,25 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: isLoading ? null : _skipStep,
+                  onPressed: isLoading
+                      ? null
+                      : () {
+                          final notifier = ref.read(
+                            setupWizardProvider.notifier,
+                          );
+                          notifier.previousStep();
+                          _pageController.previousPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          );
+                        },
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 14),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                  child: const Text('Omitir'),
+                  child: const Text('Atrás'),
                 ),
               ),
               const SizedBox(width: 15),
@@ -1014,10 +1169,37 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     if (!_inventoryFormKey.currentState!.validate()) return;
 
     final notifier = ref.read(setupWizardProvider.notifier);
+    final companyId = ref.read(companyIdProvider).value;
+
+    // Custom validation
+    bool hasError = false;
+    for (var row in _productDrafts) {
+      if (row.nameCtrl.text.trim().isEmpty) continue; // Skip empty rows
+
+      if (row.priceCtrl.text.trim().isEmpty ||
+          row.costCtrl.text.trim().isEmpty) {
+        hasError = true;
+      }
+      if (!row.isService && row.stockCtrl.text.trim().isEmpty) {
+        hasError = true;
+      }
+    }
+
+    if (hasError) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Por favor completa los campos obligatorios (*).'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
     notifier.setLoading(true);
 
     try {
       final invRepo = ref.read(inventoryRepositoryProvider);
+      final ImageService imageService = ImageService();
 
       List<Product> validProducts = [];
       Set<String> newCategories = {};
@@ -1042,8 +1224,28 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                       row.stockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
                     ) ??
                     0);
+          int minStock = row.isService
+              ? 0
+              : (int.tryParse(
+                      row.minStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+                    ) ??
+                    0);
+          String barcode = row.isService ? '' : row.barcodeCtrl.text.trim();
+          String description = row.descriptionCtrl.text.trim();
           String category = row.categoryCtrl.text.trim();
           if (category.isEmpty) category = 'General';
+
+          // Handle image upload
+          String? imageUrl;
+          if (row.imageFile != null && companyId != null) {
+            // Generate a temporary ID or just use row ID
+            String tempId = row.id;
+            imageUrl = await imageService.uploadProductImage(
+              row.imageFile!,
+              tempId,
+              companyId,
+            );
+          }
 
           validProducts.add(
             Product(
@@ -1054,8 +1256,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               price: price,
               cost: cost,
               stock: stock,
-              barcode: '',
-              imageUrl: row.imageBase64,
+              minStock: minStock,
+              barcode: barcode,
+              description: description,
+              imageUrl: imageUrl,
               isService: row.isService,
             ),
           );
@@ -1152,9 +1356,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                                 maxWidth: 500,
                               );
                               if (image != null) {
-                                final bytes = await image.readAsBytes();
                                 setState(() {
-                                  row.imageBase64 = base64Encode(bytes);
+                                  row.imageFile = image;
                                 });
                               }
                             },
@@ -1164,16 +1367,23 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                               decoration: BoxDecoration(
                                 color: Colors.grey.shade200,
                                 borderRadius: BorderRadius.circular(8),
-                                image: row.imageBase64 != null
-                                    ? DecorationImage(
-                                        image: MemoryImage(
-                                          base64Decode(row.imageBase64!),
-                                        ),
-                                        fit: BoxFit.cover,
-                                      )
+                                image: row.imageFile != null
+                                    ? (kIsWeb
+                                          ? DecorationImage(
+                                              image: NetworkImage(
+                                                row.imageFile!.path,
+                                              ),
+                                              fit: BoxFit.cover,
+                                            )
+                                          : DecorationImage(
+                                              image: FileImage(
+                                                File(row.imageFile!.path),
+                                              ),
+                                              fit: BoxFit.cover,
+                                            ))
                                     : null,
                               ),
-                              child: row.imageBase64 == null
+                              child: row.imageFile == null
                                   ? const Icon(
                                       Icons.camera_alt,
                                       size: 20,
@@ -1260,11 +1470,57 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                         ),
                         DataCell(
                           SizedBox(
+                            width: 80,
+                            child: TextFormField(
+                              controller: row.minStockCtrl,
+                              keyboardType: TextInputType.number,
+                              enabled: !row.isService,
+                              decoration: InputDecoration(
+                                hintText: '0',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                filled: row.isService,
+                                fillColor: Colors.grey.shade200,
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 120,
+                            child: TextFormField(
+                              controller: row.barcodeCtrl,
+                              enabled: !row.isService,
+                              decoration: InputDecoration(
+                                hintText: '12345',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                filled: row.isService,
+                                fillColor: Colors.grey.shade200,
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
                             width: 120,
                             child: TextFormField(
                               controller: row.categoryCtrl,
                               decoration: const InputDecoration(
                                 hintText: 'General',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 150,
+                            child: TextFormField(
+                              controller: row.descriptionCtrl,
+                              decoration: const InputDecoration(
+                                hintText: 'Detalles...',
                                 isDense: true,
                                 border: OutlineInputBorder(),
                               ),
@@ -1302,28 +1558,49 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               ),
 
               const SizedBox(height: 40),
-              SizedBox(
-                width: double.infinity,
-                height: 50,
-                child: ElevatedButton(
-                  onPressed: isLoading ? null : _saveManualProduct,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.blue.shade700,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: isLoading
+                          ? null
+                          : () {
+                              setState(() => _showManualInventoryForm = false);
+                            },
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Atrás'),
                     ),
                   ),
-                  child: isLoading
-                      ? const CircularProgressIndicator(color: Colors.white)
-                      : const Text(
-                          'Guardar Productos y Finalizar',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
+                  const SizedBox(width: 15),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      onPressed: isLoading ? null : _saveManualProduct,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        backgroundColor: Colors.blue.shade700,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                ),
+                      ),
+                      child: isLoading
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : const Text(
+                              'Guardar Productos y Finalizar',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -1371,15 +1648,51 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           ),
 
           const SizedBox(height: 40),
-          SizedBox(
-            width: double.infinity,
-            child: TextButton(
-              onPressed: isLoading ? null : _completeSetup,
-              child: const Text(
-                'Dejar para más tarde / Finalizar',
-                style: TextStyle(fontSize: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () {
+                          final notifier = ref.read(
+                            setupWizardProvider.notifier,
+                          );
+                          notifier.previousStep();
+                          _pageController.previousPage(
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut,
+                          );
+                        },
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Atrás'),
+                ),
               ),
-            ),
+              const SizedBox(width: 15),
+              Expanded(
+                flex: 2,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _completeSetup,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    backgroundColor: Colors.blue.shade700,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Finalizar',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
