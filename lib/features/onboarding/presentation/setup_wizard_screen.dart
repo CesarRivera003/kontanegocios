@@ -18,6 +18,7 @@ import '../../inventory/data/inventory_repository.dart';
 import '../../inventory/domain/product_model.dart';
 import '../../inventory/presentation/inventory_providers.dart';
 import '../../auth/presentation/auth_providers.dart';
+import '../../auth/presentation/user_profile_provider.dart';
 import 'setup_wizard_providers.dart';
 
 class SetupWizardScreen extends ConsumerStatefulWidget {
@@ -158,11 +159,19 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       // 1. Guardar nombre del usuario si aplica
       final authRepo = ref.read(authRepositoryProvider);
       final currentUser = authRepo.currentUser;
-      if (currentUser != null && _userNameCtrl.text.trim().isNotEmpty) {
+      final companyId = ref.read(companyIdProvider).value;
+      if (currentUser != null &&
+          companyId != null &&
+          _userNameCtrl.text.trim().isNotEmpty) {
         await FirebaseFirestore.instance
+            .collection('companies')
+            .doc(companyId)
             .collection('users')
             .doc(currentUser.uid)
-            .update({'name': _userNameCtrl.text.trim()});
+            .set({
+              'name': _userNameCtrl.text.trim(),
+              'role': 'admin',
+            }, SetOptions(merge: true));
       }
 
       // 2. Guardar datos de la empresa
@@ -465,11 +474,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   Widget build(BuildContext context) {
     final state = ref.watch(setupWizardProvider);
     final profileAsync = ref.watch(companyProfileProvider);
+    final userProfileAsync = ref.watch(userProfileProvider);
 
     if (profileAsync.hasValue &&
         profileAsync.value != null &&
         !_initializedCompanyFields) {
       final currentProfile = profileAsync.value!;
+      if (userProfileAsync.hasValue && userProfileAsync.value != null) {
+        if (_userNameCtrl.text.isEmpty &&
+            userProfileAsync.value!.name.isNotEmpty) {
+          _userNameCtrl.text = userProfileAsync.value!.name;
+        }
+      }
       if (_nameCtrl.text.isEmpty && currentProfile.name.isNotEmpty)
         _nameCtrl.text = currentProfile.name;
       if (_nitCtrl.text.isEmpty && currentProfile.nit.isNotEmpty)
