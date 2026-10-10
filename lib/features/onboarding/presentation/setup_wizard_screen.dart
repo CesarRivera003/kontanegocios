@@ -5,6 +5,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart' hide Border;
 import 'dart:io';
+import 'dart:convert';
+
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/utils/currency_formatter.dart';
 import '../../../shared/widgets/custom_text_field.dart';
@@ -27,27 +30,61 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final PageController _pageController = PageController();
 
-  // Paso 1: Empresa
+  // Paso 1: Perfil y Empresa
   final _companyFormKey = GlobalKey<FormState>();
+  final _userNameCtrl = TextEditingController(); // Nuevo: Nombre del Usuario
   final _nameCtrl = TextEditingController();
   final _nitCtrl = TextEditingController();
+  final _sloganCtrl = TextEditingController(); // Nuevo
+  final _addressCtrl = TextEditingController(); // Nuevo
   final _phoneCtrl = TextEditingController();
+  final _emailCtrl = TextEditingController(); // Nuevo
+  String? _imageBase64; // Nuevo
 
   // Paso 2: Cuentas
   final _accountFormKey = GlobalKey<FormState>();
   final _accountNameCtrl = TextEditingController(text: 'Caja General');
   final _accountBalanceCtrl = TextEditingController(text: '0');
+  List<BankAccount> _tempAccounts = [];
+  bool _isCashAccount = true;
+
+  // Paso 3: Inventario manual
+  final _inventoryFormKey = GlobalKey<FormState>();
+  final _prodNameCtrl = TextEditingController();
+  final _prodCategoryCtrl = TextEditingController(text: 'General');
+  final _prodUnitCtrl = TextEditingController(text: 'und');
+  final _prodPriceCtrl = TextEditingController();
+  final _prodCostCtrl = TextEditingController();
+  final _prodStockCtrl = TextEditingController();
+  final _prodMinStockCtrl = TextEditingController();
+  final _prodBarcodeCtrl = TextEditingController();
+  final _prodDescriptionCtrl = TextEditingController();
+  bool _prodHasCommission = false;
+  bool _showManualInventoryForm = false; // Toggle manual form
 
   bool _initializedCompanyFields = false;
 
   @override
   void dispose() {
     _pageController.dispose();
+    _userNameCtrl.dispose();
     _nameCtrl.dispose();
     _nitCtrl.dispose();
+    _sloganCtrl.dispose();
+    _addressCtrl.dispose();
     _phoneCtrl.dispose();
+    _emailCtrl.dispose();
     _accountNameCtrl.dispose();
     _accountBalanceCtrl.dispose();
+    _prodNameCtrl.dispose();
+    _prodCategoryCtrl.dispose();
+    _prodUnitCtrl.dispose();
+    _prodPriceCtrl.dispose();
+    _prodCostCtrl.dispose();
+    _prodStockCtrl.dispose();
+    _prodMinStockCtrl.dispose();
+    _prodBarcodeCtrl.dispose();
+    _prodDescriptionCtrl.dispose();
     super.dispose();
   }
 
@@ -88,19 +125,63 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     }
   }
 
+  Future<void> _pickImage() async {
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 50,
+        maxWidth: 500,
+      );
+
+      if (image != null) {
+        final bytes = await image.readAsBytes();
+        setState(() {
+          _imageBase64 = base64Encode(bytes);
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error al cargar imagen: $e')));
+      }
+    }
+  }
+
   Future<void> _saveCompanyStep() async {
     if (!_companyFormKey.currentState!.validate()) return;
 
     final notifier = ref.read(setupWizardProvider.notifier);
     notifier.setLoading(true);
     try {
+      // 1. Guardar nombre del usuario si aplica
+      final authRepo = ref.read(authRepositoryProvider);
+      final currentUser = authRepo.currentUser;
+      if (currentUser != null && _userNameCtrl.text.trim().isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('users')
+            .doc(currentUser.uid)
+            .update({'name': _userNameCtrl.text.trim()});
+      }
+
+      // 2. Guardar datos de la empresa
       final repository = ref.read(settingsRepositoryProvider);
       if (repository != null) {
-        await repository.updateCompanyProfileData({
+        final Map<String, dynamic> updateData = {
           'name': _nameCtrl.text.trim(),
           'nit': _nitCtrl.text.trim(),
+          'slogan': _sloganCtrl.text.trim(),
+          'address': _addressCtrl.text.trim(),
           'phone': _phoneCtrl.text.trim(),
-        });
+          'email': _emailCtrl.text.trim(),
+        };
+
+        if (_imageBase64 != null) {
+          updateData['imageBase64'] = _imageBase64;
+        }
+
+        await repository.updateCompanyProfileData(updateData);
       }
       notifier.nextStep();
       _pageController.nextPage(
@@ -118,35 +199,62 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     }
   }
 
-  Future<void> _saveAccountStep() async {
+  void _addTempAccount() {
     if (!_accountFormKey.currentState!.validate()) return;
+    if (_accountNameCtrl.text.trim().isEmpty) return;
+
+    String balanceText = _accountBalanceCtrl.text.replaceAll(
+      RegExp(r'[^0-9]'),
+      '',
+    );
+    double initialBalance = double.tryParse(balanceText) ?? 0.0;
+
+    // La primera cuenta creada será la default
+    bool isDefault = _tempAccounts.isEmpty;
+
+    final account = BankAccount(
+      id: DateTime.now().millisecondsSinceEpoch.toString(), // ID temporal
+      name: _accountNameCtrl.text.trim(),
+      balance: initialBalance,
+      isCash: _isCashAccount,
+      isDefault: isDefault,
+    );
+
+    setState(() {
+      _tempAccounts.add(account);
+      _accountNameCtrl.clear();
+      _accountBalanceCtrl.text = '0';
+    });
+  }
+
+  Future<void> _saveAccountStep() async {
+    // Si no ha añadido cuentas y hay algo en el form, lo añadimos
+    if (_tempAccounts.isEmpty && _accountNameCtrl.text.trim().isNotEmpty) {
+      _addTempAccount();
+    }
 
     final notifier = ref.read(setupWizardProvider.notifier);
     notifier.setLoading(true);
+
     try {
       final userId = ref.read(companyIdProvider).value;
-      if (userId != null) {
+      if (userId != null && _tempAccounts.isNotEmpty) {
         final financeRepo = FinanceRepository(
           FirebaseFirestore.instance,
           userId,
         );
 
-        // Convert to double safely
-        String balanceText = _accountBalanceCtrl.text.replaceAll(
-          RegExp(r'[^0-9]'),
-          '',
-        );
-        double initialBalance = double.tryParse(balanceText) ?? 0.0;
-
-        final account = BankAccount(
-          id: '',
-          name: _accountNameCtrl.text.trim(),
-          balance: initialBalance,
-          isCash: true,
-          isDefault: true,
-        );
-
-        await financeRepo.createAccount(account);
+        for (var acc in _tempAccounts) {
+          // Remover ID temporal para que firebase lo genere
+          final accountToSave = BankAccount(
+            id: '',
+            name: acc.name,
+            balance: acc.balance,
+            isCash: acc.isCash,
+            isDefault: acc.isDefault,
+          );
+          await financeRepo.createAccount(accountToSave);
+        }
       }
 
       notifier.nextStep();
@@ -366,8 +474,17 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         _nameCtrl.text = currentProfile.name;
       if (_nitCtrl.text.isEmpty && currentProfile.nit.isNotEmpty)
         _nitCtrl.text = currentProfile.nit;
+      if (_sloganCtrl.text.isEmpty && currentProfile.slogan.isNotEmpty)
+        _sloganCtrl.text = currentProfile.slogan;
+      if (_addressCtrl.text.isEmpty && currentProfile.address.isNotEmpty)
+        _addressCtrl.text = currentProfile.address;
       if (_phoneCtrl.text.isEmpty && currentProfile.phone.isNotEmpty)
         _phoneCtrl.text = currentProfile.phone;
+      if (_emailCtrl.text.isEmpty && currentProfile.email.isNotEmpty)
+        _emailCtrl.text = currentProfile.email;
+      if (_imageBase64 == null && currentProfile.imageBase64 != null)
+        _imageBase64 = currentProfile.imageBase64;
+
       _initializedCompanyFields = true;
     }
 
@@ -473,6 +590,15 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // --- PASO 1: EMPRESA ---
   Widget _buildCompanyStep(bool isLoading) {
+    ImageProvider? imageProvider;
+    if (_imageBase64 != null && _imageBase64!.isNotEmpty) {
+      try {
+        imageProvider = MemoryImage(base64Decode(_imageBase64!));
+      } catch (e) {
+        imageProvider = null;
+      }
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Form(
@@ -481,16 +607,55 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             const Text(
-              'Datos de tu Negocio',
+              'Perfil y Negocio',
               style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             Text(
-              'Ingresa la información básica de tu empresa. Esto aparecerá en tus recibos.',
+              'Completa tus datos personales y los de tu negocio. Esto será visible en tus recibos y documentos.',
               style: TextStyle(color: Colors.grey.shade600),
             ),
             const SizedBox(height: 30),
 
+            // Foto de perfil del negocio
+            Center(
+              child: Stack(
+                children: [
+                  CircleAvatar(
+                    radius: 50,
+                    backgroundColor: Colors.grey[200],
+                    backgroundImage: imageProvider,
+                    child: imageProvider == null
+                        ? const Icon(Icons.store, size: 50, color: Colors.grey)
+                        : null,
+                  ),
+                  Positioned(
+                    bottom: 0,
+                    right: 0,
+                    child: CircleAvatar(
+                      backgroundColor: Colors.blue.shade700,
+                      radius: 18,
+                      child: IconButton(
+                        icon: const Icon(
+                          Icons.camera_alt,
+                          color: Colors.white,
+                          size: 18,
+                        ),
+                        onPressed: isLoading ? null : _pickImage,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 30),
+
+            CustomTextField(
+              label: 'Tu Nombre Completo',
+              controller: _userNameCtrl,
+              icon: Icons.person,
+            ),
+            const SizedBox(height: 15),
             CustomTextField(
               label: 'Nombre Comercial',
               controller: _nameCtrl,
@@ -498,16 +663,35 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             ),
             const SizedBox(height: 15),
             CustomTextField(
-              label: 'NIT / Identificación',
+              label: 'NIT / Identificación (CC)',
               controller: _nitCtrl,
               icon: Icons.badge,
             ),
             const SizedBox(height: 15),
             CustomTextField(
-              label: 'Teléfono Contacto',
+              label: 'Eslogan o frase del negocio',
+              controller: _sloganCtrl,
+              icon: Icons.format_quote,
+            ),
+            const SizedBox(height: 15),
+            CustomTextField(
+              label: 'Dirección del negocio',
+              controller: _addressCtrl,
+              icon: Icons.location_on,
+            ),
+            const SizedBox(height: 15),
+            CustomTextField(
+              label: 'Teléfono de Contacto',
               controller: _phoneCtrl,
               icon: Icons.phone,
               keyboardType: TextInputType.phone,
+            ),
+            const SizedBox(height: 15),
+            CustomTextField(
+              label: 'Email de Contacto',
+              controller: _emailCtrl,
+              icon: Icons.email,
+              keyboardType: TextInputType.emailAddress,
             ),
 
             const SizedBox(height: 40),
@@ -541,93 +725,412 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   // --- PASO 2: CUENTAS ---
+  // --- PASO 2: CUENTAS ---
   Widget _buildAccountStep(bool isLoading) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
-      child: Form(
-        key: _accountFormKey,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Tesorería Inicial',
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Crea tus cuentas de efectivo y bancos. La primera que agregues se configurará como la principal por defecto para tus ventas en efectivo.',
+            style: TextStyle(color: Colors.grey.shade600),
+          ),
+          const SizedBox(height: 30),
+
+          // Lista de cuentas agregadas
+          if (_tempAccounts.isNotEmpty) ...[
             const Text(
-              'Tesorería Inicial',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+              'Cuentas configuradas:',
+              style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
-            Text(
-              'Configura tu cuenta de efectivo principal para empezar a registrar ventas y gastos.',
-              style: TextStyle(color: Colors.grey.shade600),
+            ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: _tempAccounts.length,
+              itemBuilder: (context, index) {
+                final acc = _tempAccounts[index];
+                return ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    acc.isCash ? Icons.money : Icons.account_balance,
+                    color: Colors.blue,
+                  ),
+                  title: Text(
+                    acc.name,
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    'Saldo inicial: ${CurrencyFormatter.format(acc.balance)}\n'
+                    'Tipo: ${acc.isCash ? 'Efectivo' : 'Banco'}'
+                    '${acc.isDefault ? ' (Principal)' : ''}',
+                  ),
+                  trailing: IconButton(
+                    icon: const Icon(Icons.delete, color: Colors.red),
+                    onPressed: () {
+                      setState(() {
+                        _tempAccounts.removeAt(index);
+                        // Re-asignar default si se borró la principal
+                        if (acc.isDefault && _tempAccounts.isNotEmpty) {
+                          _tempAccounts[0] = BankAccount(
+                            id: _tempAccounts[0].id,
+                            name: _tempAccounts[0].name,
+                            balance: _tempAccounts[0].balance,
+                            isCash: _tempAccounts[0].isCash,
+                            isDefault: true,
+                          );
+                        }
+                      });
+                    },
+                  ),
+                );
+              },
             ),
-            const SizedBox(height: 30),
+            const Divider(height: 30),
+          ],
 
-            CustomTextField(
-              label: 'Nombre de la Cuenta / Caja',
-              controller: _accountNameCtrl,
-              icon: Icons.account_balance_wallet,
-            ),
-            const SizedBox(height: 15),
-            CustomTextField(
-              label: 'Saldo Inicial',
-              controller: _accountBalanceCtrl,
-              icon: Icons.attach_money,
-              keyboardType: TextInputType.number,
-            ),
-
-            const SizedBox(height: 40),
-            Row(
+          // Formulario para añadir nueva cuenta
+          Form(
+            key: _accountFormKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: isLoading ? null : _skipStep,
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                    ),
-                    child: const Text('Omitir'),
+                Text(
+                  _tempAccounts.isEmpty
+                      ? 'Añadir Primera Cuenta'
+                      : 'Añadir Otra Cuenta',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
                   ),
                 ),
-                const SizedBox(width: 15),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: isLoading ? null : _saveAccountStep,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      backgroundColor: Colors.blue.shade700,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                const SizedBox(height: 15),
+                Row(
+                  children: [
+                    Expanded(
+                      child: RadioListTile<bool>(
+                        title: const Text('Efectivo'),
+                        value: true,
+                        groupValue: _isCashAccount,
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: (val) {
+                          if (val != null) setState(() => _isCashAccount = val);
+                        },
                       ),
                     ),
-                    child: isLoading
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Text(
-                            'Continuar',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                    Expanded(
+                      child: RadioListTile<bool>(
+                        title: const Text('Banco'),
+                        value: false,
+                        groupValue: _isCashAccount,
+                        contentPadding: EdgeInsets.zero,
+                        onChanged: (val) {
+                          if (val != null) setState(() => _isCashAccount = val);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                CustomTextField(
+                  label: 'Nombre de la Cuenta / Banco',
+                  controller: _accountNameCtrl,
+                  icon: _isCashAccount
+                      ? Icons.account_balance_wallet
+                      : Icons.account_balance,
+                ),
+                const SizedBox(height: 15),
+                CustomTextField(
+                  label: 'Saldo Inicial',
+                  controller: _accountBalanceCtrl,
+                  icon: Icons.attach_money,
+                  keyboardType: TextInputType.number,
+                ),
+                const SizedBox(height: 15),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton.icon(
+                    onPressed: _addTempAccount,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Añadir a la lista'),
                   ),
                 ),
               ],
             ),
-          ],
-        ),
+          ),
+
+          const SizedBox(height: 40),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: isLoading ? null : _skipStep,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Omitir'),
+                ),
+              ),
+              const SizedBox(width: 15),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _saveAccountStep,
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    backgroundColor: Colors.blue.shade700,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: isLoading
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text(
+                          'Continuar',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
 
+  Future<void> _saveManualProduct() async {
+    if (!_inventoryFormKey.currentState!.validate()) return;
+
+    final notifier = ref.read(setupWizardProvider.notifier);
+    notifier.setLoading(true);
+
+    try {
+      final invRepo = ref.read(inventoryRepositoryProvider);
+
+      double price =
+          double.tryParse(
+            _prodPriceCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+          ) ??
+          0.0;
+      double cost =
+          double.tryParse(
+            _prodCostCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+          ) ??
+          0.0;
+      int stock =
+          int.tryParse(_prodStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ??
+          0;
+      int minStock =
+          int.tryParse(
+            _prodMinStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+          ) ??
+          0;
+
+      final product = Product(
+        id: '',
+        name: _prodNameCtrl.text.trim(),
+        category: _prodCategoryCtrl.text.trim(),
+        unit: _prodUnitCtrl.text.trim(),
+        price: price,
+        cost: cost,
+        stock: stock,
+        minStock: minStock,
+        barcode: _prodBarcodeCtrl.text.trim(),
+        description: _prodDescriptionCtrl.text.trim(),
+        hasCommission: _prodHasCommission,
+      );
+
+      await invRepo.addProduct(product);
+
+      // Update categories provider just in case
+      if (product.category.isNotEmpty) {
+        ref.read(productCategoriesProvider.notifier).add(product.category);
+      }
+      if (product.unit.isNotEmpty) {
+        ref.read(productUnitsProvider.notifier).add(product.unit);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Producto guardado con éxito'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+      await _completeSetup();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      notifier.setLoading(false);
+    }
+  }
+
   // --- PASO 3: INVENTARIO ---
   Widget _buildInventoryStep(bool isLoading) {
+    if (_showManualInventoryForm) {
+      return SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Form(
+          key: _inventoryFormKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back),
+                    onPressed: () =>
+                        setState(() => _showManualInventoryForm = false),
+                  ),
+                  const Text(
+                    'Crear Producto Manual',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+
+              CustomTextField(
+                label: 'Nombre del Producto *',
+                controller: _prodNameCtrl,
+                icon: Icons.inventory,
+              ),
+              const SizedBox(height: 15),
+              Row(
+                children: [
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Categoría *',
+                      controller: _prodCategoryCtrl,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Unidad *',
+                      controller: _prodUnitCtrl,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 15),
+              Row(
+                children: [
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Precio Venta *',
+                      controller: _prodPriceCtrl,
+                      icon: Icons.attach_money,
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Costo *',
+                      controller: _prodCostCtrl,
+                      icon: Icons.money_off,
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 15),
+              Row(
+                children: [
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Stock Actual *',
+                      controller: _prodStockCtrl,
+                      icon: Icons.layers,
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: CustomTextField(
+                      label: 'Alerta Min. Stock',
+                      controller: _prodMinStockCtrl,
+                      icon: Icons.warning_amber,
+                      keyboardType: TextInputType.number,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 15),
+              CustomTextField(
+                label: 'Código de Barras',
+                controller: _prodBarcodeCtrl,
+                icon: Icons.qr_code,
+              ),
+              const SizedBox(height: 15),
+              CustomTextField(
+                label: 'Descripción',
+                controller: _prodDescriptionCtrl,
+                icon: Icons.description,
+                maxLines: 2,
+              ),
+              const SizedBox(height: 15),
+              SwitchListTile(
+                title: const Text('¿Genera comisión?'),
+                value: _prodHasCommission,
+                onChanged: (val) => setState(() => _prodHasCommission = val),
+              ),
+
+              const SizedBox(height: 40),
+              SizedBox(
+                width: double.infinity,
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: isLoading ? null : _saveManualProduct,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue.shade700,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: isLoading
+                      ? const CircularProgressIndicator(color: Colors.white)
+                      : const Text(
+                          'Guardar y Finalizar',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
@@ -663,8 +1166,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             onTap: isLoading
                 ? null
                 : () {
-                    context.push('/inventory/save');
-                    _completeSetup();
+                    setState(() => _showManualInventoryForm = true);
                   },
           ),
 
