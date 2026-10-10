@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:excel/excel.dart' hide Border;
 import 'dart:io';
 import 'dart:convert';
+import 'package:flutter/services.dart';
 
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -24,6 +25,7 @@ import '../../inventory/presentation/inventory_providers.dart';
 import '../../auth/presentation/auth_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import 'setup_wizard_providers.dart';
+import '../../../core/utils/currency_input_formatter.dart';
 
 class SetupWizardScreen extends ConsumerStatefulWidget {
   const SetupWizardScreen({super.key});
@@ -33,7 +35,8 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
 }
 
 class ProductDraftRow {
-  final String id = DateTime.now().microsecondsSinceEpoch.toString();
+  static int _counter = 0;
+  final String id;
   final TextEditingController nameCtrl = TextEditingController();
   final TextEditingController priceCtrl = TextEditingController();
   final TextEditingController costCtrl = TextEditingController();
@@ -47,6 +50,9 @@ class ProductDraftRow {
 
   bool isService = false;
   XFile? imageFile;
+
+  ProductDraftRow()
+      : id = '${DateTime.now().microsecondsSinceEpoch}_${++_counter}';
 
   void dispose() {
     nameCtrl.dispose();
@@ -101,6 +107,78 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     // Iniciar con 2 filas
     _productDrafts.add(ProductDraftRow());
     _productDrafts.add(ProductDraftRow());
+  }
+
+  void _showExcelImportDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.table_chart, color: Colors.green),
+            SizedBox(width: 8),
+            Text('Importar desde Excel', style: TextStyle(fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Asegúrate de que tu archivo (.xlsx) tenga el siguiente orden de columnas:',
+              style: TextStyle(fontSize: 13, color: Colors.black87),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                '1. Nombre del Producto *\n'
+                '2. Código de Barras\n'
+                '3. Precio de Venta *\n'
+                '4. Costo Unitario\n'
+                '5. Stock Actual\n'
+                '6. Categoría\n'
+                '7. Stock Mínimo\n'
+                '8. Tipo Impuesto (IVA/INC/EXENTO/EXCLUIDO)\n'
+                '9. Tarifa % (19, 8 o 0)',
+                style: TextStyle(fontSize: 12, height: 1.4, fontFamily: 'monospace'),
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _downloadTemplate();
+              },
+              icon: const Icon(Icons.download, size: 18),
+              label: const Text('Descargar / Compartir Plantilla'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancelar'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _importExcel();
+            },
+            icon: const Icon(Icons.upload_file, size: 18),
+            label: const Text('Seleccionar Archivo'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green.shade700,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _loadMainAccount() async {
@@ -708,8 +786,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
         centerTitle: true,
         automaticallyImplyLeading: false,
         actions: [
-          TextButton(onPressed: _skipStep, child: const Text('Omitir')),
-        ],
+        TextButton(
+          onPressed: () {
+            final currentStep = ref.read(setupWizardProvider).currentStep;
+            if (currentStep < 2) {
+              _skipStep(); // Avanza al siguiente paso
+            } else {
+              _completeSetup(); // Cierra en el paso de inventario
+            }
+          },
+          child: const Text('Omitir'),
+        ),
+      ],
       ),
       body: Column(
         children: [
@@ -905,28 +993,52 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             ),
 
             const SizedBox(height: 40),
-            SizedBox(
-              width: double.infinity,
-              height: 50,
-              child: ElevatedButton(
-                onPressed: isLoading ? null : _saveCompanyStep,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blue.shade700,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: isLoading ? null : _skipStep,
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('Omitir'),
                   ),
                 ),
-                child: isLoading
-                    ? const CircularProgressIndicator(color: Colors.white)
-                    : const Text(
-                        'Continuar',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                const SizedBox(width: 15),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: isLoading ? null : _saveCompanyStep,
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      backgroundColor: Colors.blue.shade700,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
-              ),
+                    ),
+                    child: isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Continuar',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
@@ -1128,8 +1240,22 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   child: const Text('Atrás'),
                 ),
               ),
-              const SizedBox(width: 15),
+              const SizedBox(width: 10),
               Expanded(
+                child: OutlinedButton(
+                  onPressed: isLoading ? null : _skipStep,
+                  style: OutlinedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text('Omitir'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 2,
                 child: ElevatedButton(
                   onPressed: isLoading ? null : _saveAccountStep,
                   style: ElevatedButton.styleFrom(
@@ -1166,33 +1292,41 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Future<void> _saveManualProduct() async {
-    if (!_inventoryFormKey.currentState!.validate()) return;
-
     final notifier = ref.read(setupWizardProvider.notifier);
     final companyId = ref.read(companyIdProvider).value;
 
-    // Custom validation
-    bool hasError = false;
-    for (var row in _productDrafts) {
-      if (row.nameCtrl.text.trim().isEmpty) continue; // Skip empty rows
+    // 1. Filtrar solo las filas que el usuario comenzó a llenar
+    final filledRows = _productDrafts.where((row) => row.nameCtrl.text.trim().isNotEmpty).toList();
 
-      if (row.priceCtrl.text.trim().isEmpty ||
-          row.costCtrl.text.trim().isEmpty) {
-        hasError = true;
-      }
-      if (!row.isService && row.stockCtrl.text.trim().isEmpty) {
-        hasError = true;
-      }
-    }
+    // 2. Validar campos obligatorios según tipo
+    for (var row in filledRows) {
+      final name = row.nameCtrl.text.trim();
+      final price = row.priceCtrl.text.trim();
+      final cost = row.costCtrl.text.trim();
+      final stock = row.stockCtrl.text.trim();
+      final barcode = row.barcodeCtrl.text.trim();
 
-    if (hasError) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Por favor completa los campos obligatorios (*).'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
+      if (price.isEmpty || cost.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('El producto "$name" requiere Precio y Costo.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        return;
+      }
+
+      if (!row.isService) {
+        if (stock.isEmpty || barcode.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('El producto físico "$name" requiere Stock y Código de Barras.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+          return;
+        }
+      }
     }
 
     notifier.setLoading(true);
@@ -1204,47 +1338,30 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
       List<Product> validProducts = [];
       Set<String> newCategories = {};
 
-      for (var row in _productDrafts) {
-        if (row.nameCtrl.text.trim().isNotEmpty &&
-            row.priceCtrl.text.trim().isNotEmpty) {
-          double price =
-              double.tryParse(
-                row.priceCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-              ) ??
-              0.0;
-          double cost = row.isService
-              ? 0.0
-              : (double.tryParse(
-                      row.costCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-                    ) ??
-                    0.0);
-          int stock = row.isService
-              ? 0
-              : (int.tryParse(
-                      row.stockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-                    ) ??
-                    0);
-          int minStock = row.isService
-              ? 0
-              : (int.tryParse(
-                      row.minStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-                    ) ??
-                    0);
-          String barcode = row.isService ? '' : row.barcodeCtrl.text.trim();
-          String description = row.descriptionCtrl.text.trim();
-          String category = row.categoryCtrl.text.trim();
-          if (category.isEmpty) category = 'General';
+      for (var row in filledRows) {
+        double price = double.tryParse(row.priceCtrl.text.replaceAll(',', '').replaceAll('.', '')) ?? 0.0;
+        double cost = double.tryParse(row.costCtrl.text.replaceAll(',', '').replaceAll('.', '')) ?? 0.0;
+        int stock = row.isService ? 0 : (int.tryParse(row.stockCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0);
+        int minStock = row.isService ? 0 : (int.tryParse(row.minStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ?? 0);
+        String barcode = row.isService ? '' : row.barcodeCtrl.text.trim();
+        String description = row.descriptionCtrl.text.trim();
+        String category = row.categoryCtrl.text.trim();
+        if (category.isEmpty) category = 'General';
 
-          // Handle image upload
+        // Manejo seguro de imagen (aplica igual para físico y servicio)
           String? imageUrl;
           if (row.imageFile != null && companyId != null) {
-            // Generate a temporary ID or just use row ID
-            String tempId = row.id;
-            imageUrl = await imageService.uploadProductImage(
-              row.imageFile!,
-              tempId,
-              companyId,
-            );
+            try {
+              final String tempId = 'prod_${row.id}_${DateTime.now().millisecondsSinceEpoch}';
+              imageUrl = await imageService.uploadProductImage(
+                row.imageFile!,
+                tempId,   
+                companyId,
+              ).timeout(const Duration(seconds: 12));
+            } catch (e) {
+              debugPrint("Error subiendo imagen de ${row.nameCtrl.text}: $e");
+              imageUrl = null;
+            }
           }
 
           validProducts.add(
@@ -1259,39 +1376,37 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
               minStock: minStock,
               barcode: barcode,
               description: description,
-              imageUrl: imageUrl,
+              imageUrl: imageUrl, // <-- Se asigna la URL subida
               isService: row.isService,
             ),
-          );
+          );  
 
-          if (category != 'General') newCategories.add(category);
-        }
+        if (category != 'General') newCategories.add(category);
       }
 
       if (validProducts.isNotEmpty) {
-        await invRepo.importProducts(validProducts); // Uses batch commit
+        await invRepo.importProducts(validProducts);
 
         for (var cat in newCategories) {
           ref.read(productCategoriesProvider.notifier).add(cat);
         }
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('✅ ${validProducts.length} productos guardados correctamente.'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
       }
 
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '${validProducts.length} productos guardados con éxito',
-            ),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
       await _completeSetup();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al guardar: $e'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       notifier.setLoading(false);
@@ -1337,23 +1452,25 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                     DataColumn(label: Text('Nombre *')),
                     DataColumn(label: Text('¿Servicio?')),
                     DataColumn(label: Text('Precio *')),
-                    DataColumn(label: Text('Costo')),
-                    DataColumn(label: Text('Stock')),
+                    DataColumn(label: Text('Costo *')),
+                    DataColumn(label: Text('Stock *')),
+                    DataColumn(label: Text('Stock Mín.')),
+                    DataColumn(label: Text('Cód. Barras *')),
                     DataColumn(label: Text('Categoría')),
+                    DataColumn(label: Text('Descripción')),
                     DataColumn(label: Text('')),
                   ],
                   rows: _productDrafts.map((row) {
                     final int idx = _productDrafts.indexOf(row);
                     return DataRow(
+                      key: ValueKey(row.id),
                       cells: [
                         DataCell(
                           InkWell(
                             onTap: () async {
-                              final ImagePicker picker = ImagePicker();
-                              final XFile? image = await picker.pickImage(
+                              final ImageService imageService = ImageService();
+                              final XFile? image = await imageService.pickAndCompressImage(
                                 source: ImageSource.gallery,
-                                imageQuality: 50,
-                                maxWidth: 500,
                               );
                               if (image != null) {
                                 setState(() {
@@ -1362,30 +1479,29 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                               }
                             },
                             child: Container(
-                              width: 40,
-                              height: 40,
+                              width: 42,
+                              height: 42,
                               decoration: BoxDecoration(
                                 color: Colors.grey.shade200,
                                 borderRadius: BorderRadius.circular(8),
+                                border: Border.all(
+                                  color: row.imageFile != null
+                                      ? Colors.blue.shade400
+                                      : Colors.grey.shade300,
+                                  width: row.imageFile != null ? 1.5 : 1,
+                                ),
                                 image: row.imageFile != null
-                                    ? (kIsWeb
-                                          ? DecorationImage(
-                                              image: NetworkImage(
-                                                row.imageFile!.path,
-                                              ),
-                                              fit: BoxFit.cover,
-                                            )
-                                          : DecorationImage(
-                                              image: FileImage(
-                                                File(row.imageFile!.path),
-                                              ),
-                                              fit: BoxFit.cover,
-                                            ))
+                                    ? DecorationImage(
+                                        image: kIsWeb
+                                            ? NetworkImage(row.imageFile!.path)
+                                            : FileImage(File(row.imageFile!.path)) as ImageProvider,
+                                        fit: BoxFit.cover,
+                                      )
                                     : null,
                               ),
                               child: row.imageFile == null
                                   ? const Icon(
-                                      Icons.camera_alt,
+                                      Icons.add_a_photo_outlined,
                                       size: 20,
                                       color: Colors.grey,
                                     )
@@ -1414,7 +1530,8 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                                 row.isService = val;
                                 if (val) {
                                   row.stockCtrl.text = '';
-                                  row.costCtrl.text = '';
+                                  row.minStockCtrl.text = '';
+                                  row.barcodeCtrl.text = '';
                                 }
                               });
                             },
@@ -1422,10 +1539,14 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                         ),
                         DataCell(
                           SizedBox(
-                            width: 100,
+                            width: 110,
                             child: TextFormField(
                               controller: row.priceCtrl,
-                              keyboardType: TextInputType.number,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^[0-9.,]+$')),
+                                CurrencyInputFormatter(),
+                              ],
                               decoration: const InputDecoration(
                                 hintText: '\$ 0',
                                 isDense: true,
@@ -1436,17 +1557,18 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                         ),
                         DataCell(
                           SizedBox(
-                            width: 100,
+                            width: 110,
                             child: TextFormField(
                               controller: row.costCtrl,
-                              keyboardType: TextInputType.number,
-                              enabled: !row.isService,
-                              decoration: InputDecoration(
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.allow(RegExp(r'^[0-9.,]+$')),
+                                CurrencyInputFormatter(),
+                              ],
+                              decoration: const InputDecoration(
                                 hintText: '\$ 0',
                                 isDense: true,
-                                border: const OutlineInputBorder(),
-                                filled: row.isService,
-                                fillColor: Colors.grey.shade200,
+                                border: OutlineInputBorder(),
                               ),
                             ),
                           ),
@@ -1456,7 +1578,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                             width: 80,
                             child: TextFormField(
                               controller: row.stockCtrl,
-                              keyboardType: TextInputType.number,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
                               enabled: !row.isService,
                               decoration: InputDecoration(
                                 hintText: '0',
@@ -1473,14 +1598,15 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                             width: 80,
                             child: TextFormField(
                               controller: row.minStockCtrl,
-                              keyboardType: TextInputType.number,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
                               enabled: !row.isService,
                               decoration: InputDecoration(
                                 hintText: '0',
                                 isDense: true,
                                 border: const OutlineInputBorder(),
-                                filled: row.isService,
-                                fillColor: Colors.grey.shade200,
                               ),
                             ),
                           ),
@@ -1627,10 +1753,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           _buildActionCard(
             icon: Icons.upload_file,
             title: 'Carga Masiva (Excel)',
-            subtitle:
-                'Importa tus productos rápidamente desde una plantilla Excel.',
+            subtitle: 'Descarga la plantilla o sube tu archivo Excel con productos.',
             color: Colors.green.shade600,
-            onTap: isLoading ? null : _importExcel,
+            onTap: isLoading ? null : _showExcelImportDialog,
           ),
 
           const SizedBox(height: 15),

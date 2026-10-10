@@ -3,7 +3,7 @@ description: "Software de punto de venta, contabilidad y facturación electróni
 publish_to: 'none' # Evita que el código se suba accidentalmente a repositorios públicos
 
 # Versión oficial de la aplicación (Visible para el usuario + Número interno de compilación)
-version: 3.1.0+3
+version: 3.2.1+4
 
 environment:
   sdk: ^3.10.4

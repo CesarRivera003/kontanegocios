@@ -144,7 +144,7 @@ class _DashboardShellState extends ConsumerState<DashboardShell> {
       _MenuEntry(
         icon: Icons.account_balance_outlined,
         selectedIcon: Icons.account_balance,
-        label: 'Tesorería',
+        label: 'Tesorería y Bancos',
         route: '/finance',
         isVisible: userProfile.role == UserRole.admin,
       ),
