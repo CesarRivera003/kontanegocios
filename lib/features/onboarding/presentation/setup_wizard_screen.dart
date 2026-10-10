@@ -28,6 +28,28 @@ class SetupWizardScreen extends ConsumerStatefulWidget {
   ConsumerState<SetupWizardScreen> createState() => _SetupWizardScreenState();
 }
 
+class ProductDraftRow {
+  final String id = DateTime.now().microsecondsSinceEpoch.toString();
+  final TextEditingController nameCtrl = TextEditingController();
+  final TextEditingController priceCtrl = TextEditingController();
+  final TextEditingController costCtrl = TextEditingController();
+  final TextEditingController stockCtrl = TextEditingController();
+  final TextEditingController categoryCtrl = TextEditingController(
+    text: 'General',
+  );
+
+  bool isService = false;
+  String? imageBase64;
+
+  void dispose() {
+    nameCtrl.dispose();
+    priceCtrl.dispose();
+    costCtrl.dispose();
+    stockCtrl.dispose();
+    categoryCtrl.dispose();
+  }
+}
+
 class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   final PageController _pageController = PageController();
 
@@ -44,26 +66,37 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
 
   // Paso 2: Cuentas
   final _accountFormKey = GlobalKey<FormState>();
-  final _accountNameCtrl = TextEditingController(text: 'Caja General');
+  final _accountNameCtrl = TextEditingController();
   final _accountBalanceCtrl = TextEditingController(text: '0');
-  List<BankAccount> _tempAccounts = [];
+
+  // Cuenta principal (Caja General) se maneja por separado para facilitar su edición inicial
+  final _mainAccountBalanceCtrl = TextEditingController(text: '0');
+
+  List<BankAccount> _tempAccounts = [
+    BankAccount(
+      id: 'default_cash',
+      name: 'Caja General',
+      balance: 0.0,
+      isCash: true,
+      isDefault: true,
+    ),
+  ];
   bool _isCashAccount = true;
 
   // Paso 3: Inventario manual
   final _inventoryFormKey = GlobalKey<FormState>();
-  final _prodNameCtrl = TextEditingController();
-  final _prodCategoryCtrl = TextEditingController(text: 'General');
-  final _prodUnitCtrl = TextEditingController(text: 'und');
-  final _prodPriceCtrl = TextEditingController();
-  final _prodCostCtrl = TextEditingController();
-  final _prodStockCtrl = TextEditingController();
-  final _prodMinStockCtrl = TextEditingController();
-  final _prodBarcodeCtrl = TextEditingController();
-  final _prodDescriptionCtrl = TextEditingController();
-  bool _prodHasCommission = false;
+  List<ProductDraftRow> _productDrafts = [];
   bool _showManualInventoryForm = false; // Toggle manual form
 
   bool _initializedCompanyFields = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Iniciar con 2 filas
+    _productDrafts.add(ProductDraftRow());
+    _productDrafts.add(ProductDraftRow());
+  }
 
   @override
   void dispose() {
@@ -77,15 +110,10 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     _emailCtrl.dispose();
     _accountNameCtrl.dispose();
     _accountBalanceCtrl.dispose();
-    _prodNameCtrl.dispose();
-    _prodCategoryCtrl.dispose();
-    _prodUnitCtrl.dispose();
-    _prodPriceCtrl.dispose();
-    _prodCostCtrl.dispose();
-    _prodStockCtrl.dispose();
-    _prodMinStockCtrl.dispose();
-    _prodBarcodeCtrl.dispose();
-    _prodDescriptionCtrl.dispose();
+    _mainAccountBalanceCtrl.dispose();
+    for (var p in _productDrafts) {
+      p.dispose();
+    }
     super.dispose();
   }
 
@@ -218,15 +246,13 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     );
     double initialBalance = double.tryParse(balanceText) ?? 0.0;
 
-    // La primera cuenta creada será la default
-    bool isDefault = _tempAccounts.isEmpty;
-
+    // Cuentas adicionales son forzadas a isDefault: false
     final account = BankAccount(
       id: DateTime.now().millisecondsSinceEpoch.toString(), // ID temporal
       name: _accountNameCtrl.text.trim(),
       balance: initialBalance,
       isCash: _isCashAccount,
-      isDefault: isDefault,
+      isDefault: false,
     );
 
     setState(() {
@@ -237,9 +263,22 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   Future<void> _saveAccountStep() async {
-    // Si no ha añadido cuentas y hay algo en el form, lo añadimos
-    if (_tempAccounts.isEmpty && _accountNameCtrl.text.trim().isNotEmpty) {
-      _addTempAccount();
+    // Actualizar el balance de la cuenta principal antes de guardar
+    String mainBalanceText = _mainAccountBalanceCtrl.text.replaceAll(
+      RegExp(r'[^0-9]'),
+      '',
+    );
+    double mainInitialBalance = double.tryParse(mainBalanceText) ?? 0.0;
+
+    // Asumimos que la primera cuenta es siempre Caja General
+    if (_tempAccounts.isNotEmpty) {
+      _tempAccounts[0] = BankAccount(
+        id: _tempAccounts[0].id,
+        name: _tempAccounts[0].name,
+        balance: mainInitialBalance,
+        isCash: _tempAccounts[0].isCash,
+        isDefault: _tempAccounts[0].isDefault,
+      );
     }
 
     final notifier = ref.read(setupWizardProvider.notifier);
@@ -253,14 +292,25 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           userId,
         );
 
+        // Verificar si ya existe una cuenta por defecto
+        final existingAccounts = await financeRepo.getAccounts().first;
+        bool hasDefaultCash = existingAccounts.any(
+          (acc) => acc.isDefault && acc.isCash,
+        );
+
         for (var acc in _tempAccounts) {
-          // Remover ID temporal para que firebase lo genere
+          // Si ya hay una cuenta por defecto en DB, no la forzamos a serlo
+          bool shouldBeDefault = acc.isDefault;
+          if (hasDefaultCash && shouldBeDefault) {
+            shouldBeDefault = false;
+          }
+
           final accountToSave = BankAccount(
             id: '',
             name: acc.name,
             balance: acc.balance,
             isCash: acc.isCash,
-            isDefault: acc.isDefault,
+            isDefault: shouldBeDefault,
           );
           await financeRepo.createAccount(accountToSave);
         }
@@ -741,7 +791,6 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
   }
 
   // --- PASO 2: CUENTAS ---
-  // --- PASO 2: CUENTAS ---
   Widget _buildAccountStep(bool isLoading) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -754,23 +803,67 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
           ),
           const SizedBox(height: 10),
           Text(
-            'Crea tus cuentas de efectivo y bancos. La primera que agregues se configurará como la principal por defecto para tus ventas en efectivo.',
+            'Configura tus cuentas de efectivo y bancos.',
             style: TextStyle(color: Colors.grey.shade600),
           ),
           const SizedBox(height: 30),
 
-          // Lista de cuentas agregadas
-          if (_tempAccounts.isNotEmpty) ...[
+          // Caja General (Principal) - Fija
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.blue.shade50,
+              border: Border.all(color: Colors.blue.shade200),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.star, color: Colors.blue, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Caja General (Principal)',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                const Text(
+                  'Cuenta donde ingresarán tus ventas en efectivo por defecto.',
+                  style: TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+                const SizedBox(height: 15),
+                CustomTextField(
+                  label: 'Saldo Inicial (Si tienes dinero en caja)',
+                  controller: _mainAccountBalanceCtrl,
+                  icon: Icons.attach_money,
+                  keyboardType: TextInputType.number,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 30),
+
+          // Lista de cuentas ADICIONALES agregadas
+          if (_tempAccounts.length > 1) ...[
             const Text(
-              'Cuentas configuradas:',
+              'Cuentas adicionales:',
               style: TextStyle(fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 10),
             ListView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              itemCount: _tempAccounts.length,
-              itemBuilder: (context, index) {
+              // Excluimos la primera cuenta (Caja General)
+              itemCount: _tempAccounts.length - 1,
+              itemBuilder: (context, idx) {
+                final index = idx + 1;
                 final acc = _tempAccounts[index];
                 return ListTile(
                   contentPadding: EdgeInsets.zero,
@@ -784,24 +877,13 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   ),
                   subtitle: Text(
                     'Saldo inicial: ${CurrencyFormatter.format(acc.balance)}\n'
-                    'Tipo: ${acc.isCash ? 'Efectivo' : 'Banco'}'
-                    '${acc.isDefault ? ' (Principal)' : ''}',
+                    'Tipo: ${acc.isCash ? 'Efectivo' : 'Banco'}',
                   ),
                   trailing: IconButton(
                     icon: const Icon(Icons.delete, color: Colors.red),
                     onPressed: () {
                       setState(() {
                         _tempAccounts.removeAt(index);
-                        // Re-asignar default si se borró la principal
-                        if (acc.isDefault && _tempAccounts.isNotEmpty) {
-                          _tempAccounts[0] = BankAccount(
-                            id: _tempAccounts[0].id,
-                            name: _tempAccounts[0].name,
-                            balance: _tempAccounts[0].balance,
-                            isCash: _tempAccounts[0].isCash,
-                            isDefault: true,
-                          );
-                        }
                       });
                     },
                   ),
@@ -817,14 +899,9 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  _tempAccounts.isEmpty
-                      ? 'Añadir Primera Cuenta'
-                      : 'Añadir Otra Cuenta',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16,
-                  ),
+                const Text(
+                  'Añadir Otra Cuenta (Bancos / Más cajas)',
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                 ),
                 const SizedBox(height: 15),
                 Row(
@@ -942,53 +1019,65 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     try {
       final invRepo = ref.read(inventoryRepositoryProvider);
 
-      double price =
-          double.tryParse(
-            _prodPriceCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-          ) ??
-          0.0;
-      double cost =
-          double.tryParse(
-            _prodCostCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-          ) ??
-          0.0;
-      int stock =
-          int.tryParse(_prodStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), '')) ??
-          0;
-      int minStock =
-          int.tryParse(
-            _prodMinStockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
-          ) ??
-          0;
+      List<Product> validProducts = [];
+      Set<String> newCategories = {};
 
-      final product = Product(
-        id: '',
-        name: _prodNameCtrl.text.trim(),
-        category: _prodCategoryCtrl.text.trim(),
-        unit: _prodUnitCtrl.text.trim(),
-        price: price,
-        cost: cost,
-        stock: stock,
-        minStock: minStock,
-        barcode: _prodBarcodeCtrl.text.trim(),
-        description: _prodDescriptionCtrl.text.trim(),
-        hasCommission: _prodHasCommission,
-      );
+      for (var row in _productDrafts) {
+        if (row.nameCtrl.text.trim().isNotEmpty &&
+            row.priceCtrl.text.trim().isNotEmpty) {
+          double price =
+              double.tryParse(
+                row.priceCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+              ) ??
+              0.0;
+          double cost = row.isService
+              ? 0.0
+              : (double.tryParse(
+                      row.costCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+                    ) ??
+                    0.0);
+          int stock = row.isService
+              ? 0
+              : (int.tryParse(
+                      row.stockCtrl.text.replaceAll(RegExp(r'[^0-9]'), ''),
+                    ) ??
+                    0);
+          String category = row.categoryCtrl.text.trim();
+          if (category.isEmpty) category = 'General';
 
-      await invRepo.addProduct(product);
+          validProducts.add(
+            Product(
+              id: '',
+              name: row.nameCtrl.text.trim(),
+              category: category,
+              unit: row.isService ? 'Servicio' : 'Und',
+              price: price,
+              cost: cost,
+              stock: stock,
+              barcode: '',
+              imageUrl: row.imageBase64,
+              isService: row.isService,
+            ),
+          );
 
-      // Update categories provider just in case
-      if (product.category.isNotEmpty) {
-        ref.read(productCategoriesProvider.notifier).add(product.category);
+          if (category != 'General') newCategories.add(category);
+        }
       }
-      if (product.unit.isNotEmpty) {
-        ref.read(productUnitsProvider.notifier).add(product.unit);
+
+      if (validProducts.isNotEmpty) {
+        await invRepo.importProducts(validProducts); // Uses batch commit
+
+        for (var cat in newCategories) {
+          ref.read(productCategoriesProvider.notifier).add(cat);
+        }
       }
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Producto guardado con éxito'),
+          SnackBar(
+            content: Text(
+              '${validProducts.length} productos guardados con éxito',
+            ),
             backgroundColor: Colors.green,
           ),
         );
@@ -1023,98 +1112,193 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                         setState(() => _showManualInventoryForm = false),
                   ),
                   const Text(
-                    'Crear Producto Manual',
+                    'Ingreso Rápido de Inventario',
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                 ],
               ),
               const SizedBox(height: 20),
 
-              CustomTextField(
-                label: 'Nombre del Producto *',
-                controller: _prodNameCtrl,
-                icon: Icons.inventory,
-              ),
-              const SizedBox(height: 15),
-              Row(
-                children: [
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Categoría *',
-                      controller: _prodCategoryCtrl,
-                    ),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: DataTable(
+                  columnSpacing: 20,
+                  horizontalMargin: 0,
+                  headingTextStyle: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.black87,
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Unidad *',
-                      controller: _prodUnitCtrl,
-                    ),
-                  ),
-                ],
+                  columns: const [
+                    DataColumn(label: Text('Foto')),
+                    DataColumn(label: Text('Nombre *')),
+                    DataColumn(label: Text('¿Servicio?')),
+                    DataColumn(label: Text('Precio *')),
+                    DataColumn(label: Text('Costo')),
+                    DataColumn(label: Text('Stock')),
+                    DataColumn(label: Text('Categoría')),
+                    DataColumn(label: Text('')),
+                  ],
+                  rows: _productDrafts.map((row) {
+                    final int idx = _productDrafts.indexOf(row);
+                    return DataRow(
+                      cells: [
+                        DataCell(
+                          InkWell(
+                            onTap: () async {
+                              final ImagePicker picker = ImagePicker();
+                              final XFile? image = await picker.pickImage(
+                                source: ImageSource.gallery,
+                                imageQuality: 50,
+                                maxWidth: 500,
+                              );
+                              if (image != null) {
+                                final bytes = await image.readAsBytes();
+                                setState(() {
+                                  row.imageBase64 = base64Encode(bytes);
+                                });
+                              }
+                            },
+                            child: Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade200,
+                                borderRadius: BorderRadius.circular(8),
+                                image: row.imageBase64 != null
+                                    ? DecorationImage(
+                                        image: MemoryImage(
+                                          base64Decode(row.imageBase64!),
+                                        ),
+                                        fit: BoxFit.cover,
+                                      )
+                                    : null,
+                              ),
+                              child: row.imageBase64 == null
+                                  ? const Icon(
+                                      Icons.camera_alt,
+                                      size: 20,
+                                      color: Colors.grey,
+                                    )
+                                  : null,
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 150,
+                            child: TextFormField(
+                              controller: row.nameCtrl,
+                              decoration: const InputDecoration(
+                                hintText: 'Ej. Camisa',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          Switch(
+                            value: row.isService,
+                            onChanged: (val) {
+                              setState(() {
+                                row.isService = val;
+                                if (val) {
+                                  row.stockCtrl.text = '';
+                                  row.costCtrl.text = '';
+                                }
+                              });
+                            },
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 100,
+                            child: TextFormField(
+                              controller: row.priceCtrl,
+                              keyboardType: TextInputType.number,
+                              decoration: const InputDecoration(
+                                hintText: '\$ 0',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 100,
+                            child: TextFormField(
+                              controller: row.costCtrl,
+                              keyboardType: TextInputType.number,
+                              enabled: !row.isService,
+                              decoration: InputDecoration(
+                                hintText: '\$ 0',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                filled: row.isService,
+                                fillColor: Colors.grey.shade200,
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 80,
+                            child: TextFormField(
+                              controller: row.stockCtrl,
+                              keyboardType: TextInputType.number,
+                              enabled: !row.isService,
+                              decoration: InputDecoration(
+                                hintText: '0',
+                                isDense: true,
+                                border: const OutlineInputBorder(),
+                                filled: row.isService,
+                                fillColor: Colors.grey.shade200,
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          SizedBox(
+                            width: 120,
+                            child: TextFormField(
+                              controller: row.categoryCtrl,
+                              decoration: const InputDecoration(
+                                hintText: 'General',
+                                isDense: true,
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                          ),
+                        ),
+                        DataCell(
+                          IconButton(
+                            icon: const Icon(Icons.delete, color: Colors.red),
+                            onPressed: () {
+                              if (_productDrafts.length > 1) {
+                                setState(() {
+                                  row.dispose();
+                                  _productDrafts.removeAt(idx);
+                                });
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    );
+                  }).toList(),
+                ),
               ),
+
               const SizedBox(height: 15),
-              Row(
-                children: [
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Precio Venta *',
-                      controller: _prodPriceCtrl,
-                      icon: Icons.attach_money,
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Costo *',
-                      controller: _prodCostCtrl,
-                      icon: Icons.money_off,
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 15),
-              Row(
-                children: [
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Stock Actual *',
-                      controller: _prodStockCtrl,
-                      icon: Icons.layers,
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: CustomTextField(
-                      label: 'Alerta Min. Stock',
-                      controller: _prodMinStockCtrl,
-                      icon: Icons.warning_amber,
-                      keyboardType: TextInputType.number,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 15),
-              CustomTextField(
-                label: 'Código de Barras',
-                controller: _prodBarcodeCtrl,
-                icon: Icons.qr_code,
-              ),
-              const SizedBox(height: 15),
-              CustomTextField(
-                label: 'Descripción',
-                controller: _prodDescriptionCtrl,
-                icon: Icons.description,
-                maxLines: 2,
-              ),
-              const SizedBox(height: 15),
-              SwitchListTile(
-                title: const Text('¿Genera comisión?'),
-                value: _prodHasCommission,
-                onChanged: (val) => setState(() => _prodHasCommission = val),
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _productDrafts.add(ProductDraftRow());
+                  });
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Agregar otra fila'),
               ),
 
               const SizedBox(height: 40),
@@ -1133,7 +1317,7 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
                   child: isLoading
                       ? const CircularProgressIndicator(color: Colors.white)
                       : const Text(
-                          'Guardar y Finalizar',
+                          'Guardar Productos y Finalizar',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.bold,
