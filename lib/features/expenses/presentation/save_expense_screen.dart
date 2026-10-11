@@ -30,7 +30,7 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
   
   DateTime _selectedDate = DateTime.now();
   String _paymentMethod = 'Efectivo';
-  String? _selectedBankId;
+  String? _selectedAccountId;
   
   // Lógica de Pendientes
   bool _isPending = false;
@@ -45,7 +45,7 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
     _descCtrl = TextEditingController(text: e?.description ?? '');
     _providerCtrl = TextEditingController(text: e?.provider ?? '');
     _categoryCtrl = TextEditingController(text: e?.category ?? '');
-    _amountCtrl = TextEditingController(text: e != null ? CurrencyFormatter.format(e.amount).replaceAll(RegExp(r'[^0-9.]'), '') : ''); // Limpio para editar
+    _amountCtrl = TextEditingController(text: e != null ? CurrencyFormatter.format(e.amount).replaceAll(RegExp(r'[^0-9.]'), '') : '');
 
     _selectedDate = e?.date ?? DateTime.now();
     _paymentMethod = e?.paymentMethod ?? 'Efectivo';
@@ -100,14 +100,12 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
       final accounts = ref.read(bankAccountsProvider).value ?? [];
       
       String? savedBankName;
-      if (_paymentMethod == 'Transferencia') {
-        if (_selectedBankId != null) {
-          try {
-            savedBankName = accounts.firstWhere((a) => a.id == _selectedBankId).name;
-          } catch (_) {}
-        } else if (widget.expenseToEdit != null) {
-          savedBankName = widget.expenseToEdit!.bankName;
-        }
+      if (_selectedAccountId != null) {
+        try {
+          savedBankName = accounts.firstWhere((a) => a.id == _selectedAccountId).name;
+        } catch (_) {}
+      } else if (widget.expenseToEdit != null) {
+        savedBankName = widget.expenseToEdit!.bankName;
       }
 
       final expense = Expense(
@@ -186,15 +184,18 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
       if (!_isPending) {
         String? targetAccountId;
 
-        if (_paymentMethod == 'Efectivo') {
-          final cashAccounts = accounts.where((a) => a.isCash && a.isActive).toList();
-          if (cashAccounts.isNotEmpty) {
-             final defaultCash = cashAccounts.where((a) => a.isDefault).toList();
-             targetAccountId = defaultCash.isNotEmpty ? defaultCash.first.id : cashAccounts.first.id;
+        if (_paymentMethod == 'Efectivo' || _paymentMethod == 'Transferencia') {
+          targetAccountId = _selectedAccountId;
+          
+          // Fallback de seguridad si por alguna razón vino nulo
+          if (targetAccountId == null) {
+            final isCash = _paymentMethod == 'Efectivo';
+            final relevantAccounts = accounts.where((a) => a.isActive && (isCash ? a.isCash : !a.isCash)).toList();
+            if (relevantAccounts.isNotEmpty) {
+              final defaultAcc = relevantAccounts.where((a) => a.isDefault).toList();
+              targetAccountId = defaultAcc.isNotEmpty ? defaultAcc.first.id : relevantAccounts.first.id;
+            }
           }
-        } 
-        else if (_paymentMethod == 'Transferencia') {
-          targetAccountId = _selectedBankId; 
         }
         
         if (targetAccountId != null) {
@@ -408,37 +409,49 @@ class _SaveExpenseScreenState extends ConsumerState<SaveExpenseScreen> {
                 items: ['Efectivo', 'Transferencia', 'Otros'].map((m) => DropdownMenuItem(value: m, child: Text(m))).toList(),
                 onChanged: (v) => setState(() {
                   _paymentMethod = v!;
-                  // Si cambia el método y no es transferencia, limpiamos el banco
-                  if (_paymentMethod != 'Transferencia') _selectedBankId = null;
+                  _selectedAccountId = null; // Reiniciamos la cuenta para que seleccione una válida del nuevo tipo
                 }),
               ),
               
-              // --- SELECTOR DE BANCO (NUEVO) ---
-              if (_paymentMethod == 'Transferencia') ...[
+              // --- SELECTOR DE CUENTA (EFECTIVO O BANCO) ---
+              if (_paymentMethod == 'Efectivo' || _paymentMethod == 'Transferencia') ...[
                 const SizedBox(height: 15),
                 Consumer(
                   builder: (context, ref, child) {
                     final accountsAsync = ref.watch(bankAccountsProvider);
+                    final isCash = _paymentMethod == 'Efectivo';
                     
                     return accountsAsync.when(
                       data: (accounts) {
-                        // Filtramos solo bancos activos (no efectivo)
-                        final banks = accounts.where((a) => !a.isCash && a.isActive).toList();
+                        // Filtramos según el método de pago
+                        final filteredAccounts = accounts.where((a) => a.isActive && (isCash ? a.isCash : !a.isCash)).toList();
                         
-                        if (banks.isEmpty) {
-                          return const Text("⚠️ No tienes bancos registrados en Tesorería", style: TextStyle(color: Colors.orange));
+                        if (filteredAccounts.isEmpty) {
+                          return Text(
+                            isCash ? "⚠️ No tienes cajas de efectivo activas" : "⚠️ No tienes bancos registrados en Tesorería",
+                            style: const TextStyle(color: Colors.orange),
+                          );
+                        }
+
+                        // Si no hay cuenta seleccionada o la actual no pertenece al filtro, auto-seleccionamos la predeterminada o la primera
+                        if (_selectedAccountId == null || !filteredAccounts.any((a) => a.id == _selectedAccountId)) {
+                          final defaultAcc = filteredAccounts.where((a) => a.isDefault).toList();
+                          _selectedAccountId = defaultAcc.isNotEmpty ? defaultAcc.first.id : filteredAccounts.first.id;
                         }
 
                         return DropdownButtonFormField<String>(
-                          value: _selectedBankId,
-                          decoration: const InputDecoration(
-                            labelText: 'Banco', 
-                            border: OutlineInputBorder(), 
-                            prefixIcon: Icon(Icons.account_balance)
+                          value: _selectedAccountId,
+                          decoration: InputDecoration(
+                            labelText: isCash ? 'Caja de Efectivo' : 'Banco', 
+                            border: const OutlineInputBorder(), 
+                            prefixIcon: Icon(isCash ? Icons.point_of_sale : Icons.account_balance),
                           ),
-                          items: banks.map((b) => DropdownMenuItem(value: b.id, child: Text(b.name))).toList(),
-                          onChanged: (val) => setState(() => _selectedBankId = val),
-                          validator: (v) => v == null ? 'Debes seleccionar un banco' : null,
+                          items: filteredAccounts.map((b) => DropdownMenuItem(
+                            value: b.id, 
+                            child: Text('${b.name} (${CurrencyFormatter.format(b.balance)})'),
+                          )).toList(),
+                          onChanged: (val) => setState(() => _selectedAccountId = val),
+                          validator: (v) => v == null ? 'Debes seleccionar una cuenta' : null,
                         );
                       },
                       loading: () => const LinearProgressIndicator(),

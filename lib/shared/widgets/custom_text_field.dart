@@ -10,10 +10,12 @@ class CustomTextField extends StatelessWidget {
   final int? maxLines;
   final bool isNumber;
   final Widget? suffixIcon;
-  
-  // --- NUEVAS PROPIEDADES ---
   final bool readOnly; 
   final bool enabled;
+
+  // --- NUEVAS PROPIEDADES PARA CONTROLAR OBLIGATORIEDAD ---
+  final bool isRequired;
+  final String? Function(String?)? validator;
 
   const CustomTextField({
     super.key,
@@ -25,9 +27,10 @@ class CustomTextField extends StatelessWidget {
     this.maxLines = 1,
     this.isNumber = false,
     this.suffixIcon,
-    // Inicializamos con valores por defecto
     this.readOnly = false,
     this.enabled = true,
+    this.isRequired = true, // Por defecto es obligatorio
+    this.validator,        // Validador personalizado opcional
   });
 
   @override
@@ -41,11 +44,8 @@ class CustomTextField extends StatelessWidget {
           controller: controller,
           obscureText: isPassword,
           keyboardType: isNumber ? TextInputType.number : keyboardType,
-          
-          // CONECTAMOS LAS PROPIEDADES
           readOnly: readOnly,
           enabled: enabled,
-
           inputFormatters: isNumber 
               ? [FilteringTextInputFormatter.digitsOnly] 
               : null,
@@ -53,20 +53,24 @@ class CustomTextField extends StatelessWidget {
           decoration: InputDecoration(
             prefixIcon: icon != null ? Icon(icon, color: Colors.grey[600]) : null,
             suffixIcon: suffixIcon,
-            
-            // FEEDBACK VISUAL:
-            // Si es de solo lectura, ponemos un fondo gris suave
             filled: readOnly || !enabled,
             fillColor: (readOnly || !enabled) ? Colors.grey[100] : null,
-
             hintText: 'Ingresa tu $label',
             hintStyle: TextStyle(color: Colors.grey[400]),
             border: const OutlineInputBorder(),
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
           ),
           validator: (value) {
-            // Si es de solo lectura, generalmente no validamos que esté vacío
-            if (!readOnly && (value == null || value.isEmpty)) {
+            // 1. Si se pasó un validador personalizado, se usa ese
+            if (validator != null) {
+              return validator!(value);
+            }
+            // 2. Si no es obligatorio o es de solo lectura, pasa libre
+            if (!isRequired || readOnly || !enabled) {
+              return null;
+            }
+            // 3. Validación por defecto si es obligatorio
+            if (value == null || value.trim().isEmpty) {
               return 'Este campo es obligatorio';
             }
             return null;
