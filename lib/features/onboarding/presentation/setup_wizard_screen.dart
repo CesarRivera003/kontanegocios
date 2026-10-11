@@ -26,6 +26,7 @@ import '../../auth/presentation/auth_providers.dart';
 import '../../auth/presentation/user_profile_provider.dart';
 import 'setup_wizard_providers.dart';
 import '../../../core/utils/currency_input_formatter.dart';
+import '../../../core/utils/user_code_generator.dart';
 
 class SetupWizardScreen extends ConsumerStatefulWidget {
   const SetupWizardScreen({super.key});
@@ -310,22 +311,61 @@ class _SetupWizardScreenState extends ConsumerState<SetupWizardScreen> {
     final notifier = ref.read(setupWizardProvider.notifier);
     notifier.setLoading(true);
     try {
-      // 1. Guardar nombre del usuario si aplica
+      // 1. Guardar nombre del usuario con generación de username y userCode
       final authRepo = ref.read(authRepositoryProvider);
       final currentUser = authRepo.currentUser;
       final companyId = ref.read(companyIdProvider).value;
-      if (currentUser != null &&
-          companyId != null &&
-          _userNameCtrl.text.trim().isNotEmpty) {
-        await FirebaseFirestore.instance
+      final newName = _userNameCtrl.text.trim();
+
+      if (currentUser != null && companyId != null && newName.isNotEmpty) {
+        final userRef = FirebaseFirestore.instance
             .collection('companies')
             .doc(companyId)
             .collection('users')
-            .doc(currentUser.uid)
-            .set({
-              'name': _userNameCtrl.text.trim(),
-              'role': 'admin',
-            }, SetOptions(merge: true));
+            .doc(currentUser.uid);
+
+        final docSnap = await userRef.get();
+
+        if (docSnap.exists) {
+          final data = docSnap.data() ?? {};
+          final String? existingCode = data['userCode'];
+          final String? existingUsername = data['username'];
+
+          Map<String, dynamic> updatePayload = {
+            'name': newName,
+          };
+
+          if (existingCode == null || existingCode.isEmpty) {
+            updatePayload['userCode'] = 'A01';
+          }
+
+          if (existingUsername == null || existingUsername.isEmpty) {
+            updatePayload['username'] = UserCodeGenerator.generateUsername(
+              fullName: newName,
+              existingUsernames: [],
+            );
+          }
+
+          await userRef.update(updatePayload);
+        } else {
+          // Creación inicial del perfil de administrador con su código A01 y username
+          await userRef.set({
+            'id': currentUser.uid,
+            'name': newName,
+            'email': currentUser.email ?? '',
+            'role': 'admin',
+            'username': UserCodeGenerator.generateUsername(
+              fullName: newName,
+              existingUsernames: [],
+            ),
+            'userCode': 'A01',
+            'isActive': true,
+            'createdAt': FieldValue.serverTimestamp(),
+          });
+        }
+
+        // Forzar actualización del provider para que toda la app lo tenga al instante
+        ref.invalidate(userProfileProvider);
       }
 
       // 2. Guardar datos de la empresa
